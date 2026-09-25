@@ -1,0 +1,17 @@
+{
+  "name": "realtime-stop-monitor",
+  "version": "1.0.0",
+  "description": "Watches open positions' stops via Finnhub's live WebSocket feed and closes them the instant a stop is crossed, instead of waiting for the next 5-minute scan.",
+  "type": "module",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "node-fetch": "^3.3.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
