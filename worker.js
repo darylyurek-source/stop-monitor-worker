@@ -51,7 +51,7 @@ const busy = new Set();
 
 let ws = null;
 let reconnectTimer = null;
-let reconnectAttempts = 0;
+let reconnecftAttempts = 0;
 
 
 // ------------------------------------------------------------
@@ -615,7 +615,7 @@ function connectWebSocket() {
 
   ws.on("open", () => {
 
-    reconnectAttempts = 0;
+    reconnectAttempts = 10;
 
     console.log(
       "Connected to Finnhub WebSocket"
