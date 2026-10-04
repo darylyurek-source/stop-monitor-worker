@@ -1,169 +1,790 @@
-// Real-time stop-monitoring worker.
+// worker.js — Render stop-monitor-worker for Dart A live forward-test (PAPER).
 //
-// What this does, in plain terms:
-//   - Connects to Finnhub's free real-time WebSocket feed (genuinely live
-//     ticks, not a 5-minute poll).
-//   - Every SYNC_INTERVAL_MS, asks Base44 which positions are currently
-//     open and what their current_stop is, and subscribes to those symbols.
-//   - On every live tick, checks: has price crossed that position's stop?
-//   - The instant it has, calls a Base44 function to close that position
-//     immediately, using the real tick price — not waiting for the next
-//     scheduled scan.
+// Finnhub supplies live WebSocket ticks.
+// Base44 owns ALL trading math.
+// This worker only watches the stored trigger prices and sends events to Base44.
 //
-// This is deliberately a SEPARATE, small process from the main Base44 app.
-// It only ever does two things: watch prices, and fire an urgent close.
-// It never opens new positions and never touches candidate selection —
-// that stays exactly as it is today.
+// Real-time events:
+//   stop      = -$1,700
+//   press1    = +$200
+//   press2    = +$400
+//   exit_900  = +$900
 //
-// Deploy this as a Render "Background Worker" (or Railway/Fly.io — any
-// platform that keeps a Node process running continuously). It needs three
-// environment variables set wherever you deploy it:
-//   FINNHUB_API_KEY        - same key already used inside Base44
-//   BASE44_APP_URL         - e.g. https://berserk-pulse-trade-scan.base44.app
-//   BASE44_API_KEY         - a Base44 API key with read/write access to
-//                             this app's Position entity (generate this
-//                             from the Base44 app's API settings)
+// Paper trading only. All values are USD.
 
 import WebSocket from "ws";
 import fetch from "node-fetch";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
-const BASE44_APP_URL = process.env.BASE44_APP_URL;
+const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 
 if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
-  console.error("Missing required environment variables. Need FINNHUB_API_KEY, BASE44_APP_URL, BASE44_API_KEY.");
+  console.error(
+    "Missing required environment variables. Need FINNHUB_API_KEY, BASE44_APP_URL, BASE44_API_KEY."
+  );
   process.exit(1);
 }
 
-const SYNC_INTERVAL_MS = 5 * 60 * 1000; // re-check open positions every 5 min
-const RECONNECT_DELAY_MS = 5000;
+const FINNHUB_WS_URL =
+  "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
 
-// In-memory map of what we're watching: symbol -> { positionId, side, stop, entryPrice }
-// Only ONE entry per symbol is kept (if somehow two positions share a symbol,
-// last-synced wins — this should be rare given the app's one-per-symbol-per-day rule).
-let watchList = new Map();
+const EVENT_ENDPOINT =
+  `${BASE44_APP_URL}/api/functions/realtimeStopClose`;
+
+// IMPORTANT:
+// Preserve the exact Position endpoint already proven to work in this worker.
+const POSITIONS_ENDPOINT =
+  `${BASE44_APP_URL}/api/entities/Position?status=open`;
+
+// Check Base44 frequently so newly opened positions begin real-time monitoring quickly.
+const SYNC_INTERVAL_MS = 15000;
+
+const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 30000;
+
+// symbol -> current Base44 Position state
+const positions = new Map();
+
+// Prevent simultaneous event requests for the same Position.
+const busy = new Set();
+
 let ws = null;
-let currentSubscriptions = new Set();
+let reconnectTimer = null;
+let reconnectAttempts = 0;
 
-// --- Fetch current open positions + their stops from Base44 ---
-async function syncOpenPositions() {
+
+// ------------------------------------------------------------
+// BASE44 POSITION SYNC
+// ------------------------------------------------------------
+
+async function fetchOpenPositions() {
+  const res = await fetch(POSITIONS_ENDPOINT, {
+    headers: {
+      Authorization: `Bearer ${BASE44_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    throw new Error(
+      `Base44 positions HTTP ${res.status} ${res.statusText}`
+    );
+  }
+
+  const body = await res.json();
+
+  if (Array.isArray(body)) return body;
+  if (Array.isArray(body.items)) return body.items;
+  if (Array.isArray(body.data)) return body.data;
+
+  return [];
+}
+
+
+async function syncWithBase44() {
   try {
-    const res = await fetch(`${BASE44_APP_URL}/api/entities/Position?status=open`, {
-      headers: { "Authorization": `Bearer ${BASE44_API_KEY}` },
-    });
-    if (!res.ok) {
-      console.error(`Sync failed: ${res.status} ${res.statusText}`);
+    const items = await fetchOpenPositions();
+    const seen = new Set();
+
+    for (const it of items) {
+      const symbol = String(it.symbol || "").toUpperCase();
+
+      if (!symbol) continue;
+
+      seen.add(symbol);
+
+      const state = {
+        id: it.id,
+        symbol,
+        side: String(it.side || "").toLowerCase(),
+        status: it.status,
+
+        shares: it.shares,
+        weighted_avg_cost: it.weighted_avg_cost,
+
+        pressed_1r: !!it.pressed_1r,
+        pressed_2r: !!it.pressed_2r,
+
+        current_stop: numberOrNull(it.current_stop),
+
+        trigger_press1_price:
+          numberOrNull(it.trigger_press1_price),
+
+        trigger_press2_price:
+          numberOrNull(it.trigger_press2_price),
+
+        trigger_exit_price:
+          numberOrNull(it.trigger_exit_price),
+      };
+
+      const existing = positions.get(symbol);
+
+      if (!existing) {
+        positions.set(symbol, state);
+
+        wsSend({
+          type: "subscribe",
+          symbol,
+        });
+
+        console.log(
+          `[sync] + ${symbol} side=${state.side}`
+        );
+      } else {
+        // Base44 is authoritative.
+        Object.assign(existing, state);
+      }
+    }
+
+    // Remove anything Base44 no longer reports as open.
+    for (const symbol of Array.from(positions.keys())) {
+      if (!seen.has(symbol)) {
+        dropPosition(symbol, "closed_on_base44");
+      }
+    }
+
+    console.log(
+      `[sync] ${positions.size} open position(s): ` +
+      (positions.size
+        ? Array.from(positions.keys()).join(", ")
+        : "(none)")
+    );
+
+  } catch (err) {
+    console.error(
+      "[sync] error:",
+      err.message
+    );
+  }
+}
+
+
+// ------------------------------------------------------------
+// HELPERS
+// ------------------------------------------------------------
+
+function numberOrNull(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const n = Number(value);
+
+  return Number.isFinite(n) ? n : null;
+}
+
+
+function isLong(position) {
+  return position.side === "long";
+}
+
+
+function hitsStop(position, price) {
+  if (position.current_stop == null) {
+    return false;
+  }
+
+  return isLong(position)
+    ? price <= position.current_stop
+    : price >= position.current_stop;
+}
+
+
+function hitsProfitLevel(position, price, level) {
+  if (level == null) {
+    return false;
+  }
+
+  return isLong(position)
+    ? price >= level
+    : price <= level;
+}
+
+
+// ------------------------------------------------------------
+// BASE44 REAL-TIME EVENT
+// ------------------------------------------------------------
+
+async function fireEvent(
+  positionId,
+  symbol,
+  realtimePrice,
+  event
+) {
+  const res = await fetch(EVENT_ENDPOINT, {
+    method: "POST",
+
+    headers: {
+      Authorization: `Bearer ${BASE44_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+
+    body: JSON.stringify({
+      positionId,
+      symbol,
+      realtimePrice,
+      event,
+    }),
+  });
+
+  let body = null;
+
+  try {
+    body = await res.json();
+  } catch (_) {
+    // Leave body null if Base44 returned no JSON.
+  }
+
+  if (res.status === 404) {
+    console.log(
+      `[event] ${symbol} ${event}: position not found`
+    );
+
+    return {
+      not_found: true,
+    };
+  }
+
+  if (res.status === 409) {
+    console.error(
+      `[event] ${symbol} ${event}: symbol mismatch`,
+      body
+    );
+
+    return {
+      symbol_mismatch: true,
+      ...body,
+    };
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      `Base44 event HTTP ${res.status}: ${JSON.stringify(body)}`
+    );
+  }
+
+  return body;
+}
+
+
+// ------------------------------------------------------------
+// APPLY BASE44 RESPONSE TO LOCAL STATE
+// ------------------------------------------------------------
+
+function syncFromResponse(symbol, response) {
+  if (!response) return;
+
+  const position = positions.get(symbol);
+
+  if (!position) return;
+
+  if (response.shares !== undefined) {
+    position.shares = response.shares;
+  }
+
+  if (response.weighted_avg_cost !== undefined) {
+    position.weighted_avg_cost =
+      response.weighted_avg_cost;
+  }
+
+  if (response.current_stop !== undefined) {
+    position.current_stop =
+      numberOrNull(response.current_stop);
+  }
+
+  if (response.trigger_press1_price !== undefined) {
+    position.trigger_press1_price =
+      numberOrNull(response.trigger_press1_price);
+  }
+
+  if (response.trigger_press2_price !== undefined) {
+    position.trigger_press2_price =
+      numberOrNull(response.trigger_press2_price);
+  }
+
+  if (response.trigger_exit_price !== undefined) {
+    position.trigger_exit_price =
+      numberOrNull(response.trigger_exit_price);
+  }
+
+  if (typeof response.pressed_1r === "boolean") {
+    position.pressed_1r =
+      response.pressed_1r;
+  }
+
+  if (typeof response.pressed_2r === "boolean") {
+    position.pressed_2r =
+      response.pressed_2r;
+  }
+
+  if (typeof response.status === "string") {
+    position.status =
+      response.status;
+  }
+}
+
+
+function isClosedResponse(response) {
+  return !!response &&
+    (
+      response.status === "closed" ||
+      response.closed === true ||
+      response.already_closed === true
+    );
+}
+
+
+// ------------------------------------------------------------
+// REMOVE POSITION FROM REAL-TIME MONITOR
+// ------------------------------------------------------------
+
+function dropPosition(symbol, reason) {
+  if (!positions.has(symbol)) {
+    return;
+  }
+
+  positions.delete(symbol);
+  busy.delete(symbol);
+
+  wsSend({
+    type: "unsubscribe",
+    symbol,
+  });
+
+  console.log(
+    `[drop] ${symbol} (${reason})`
+  );
+}
+
+
+// ------------------------------------------------------------
+// REAL-TIME TICK PROCESSING
+//
+// ORDER:
+//
+// stop
+// press1
+// press2
+// exit_900
+//
+// After every event, Base44 returns the new levels.
+// Those new levels are used before evaluating the next event.
+// ------------------------------------------------------------
+
+async function evaluateTick(symbol, price) {
+  let position = positions.get(symbol);
+
+  if (!position) return;
+
+  if (position.status !== "open") {
+    return;
+  }
+
+  // Only one event chain per Position at a time.
+  if (busy.has(symbol)) {
+    return;
+  }
+
+  busy.add(symbol);
+
+  try {
+
+    // --------------------------------------------------------
+    // 1. HARD STOP
+    // --------------------------------------------------------
+
+    if (hitsStop(position, price)) {
+      const response =
+        await fireEvent(
+          position.id,
+          symbol,
+          price,
+          "stop"
+        );
+
+      if (response?.not_found) {
+        dropPosition(
+          symbol,
+          "position_not_found"
+        );
+        return;
+      }
+
+      syncFromResponse(
+        symbol,
+        response
+      );
+
+      if (isClosedResponse(response)) {
+        dropPosition(
+          symbol,
+          "stop_hit"
+        );
+      }
+
       return;
     }
-    const positions = await res.json();
-    const newWatchList = new Map();
-    for (const p of positions) {
-      newWatchList.set(p.symbol.toUpperCase(), {
-        positionId: p.id,
-        side: p.side,
-        stop: Number(p.current_stop),
-        entryPrice: Number(p.entry_price),
-      });
-    }
-    watchList = newWatchList;
-    updateSubscriptions();
-    console.log(`Synced ${watchList.size} open position(s): ${[...watchList.keys()].join(", ") || "(none)"}`);
-  } catch (err) {
-    console.error("Sync error:", err.message);
-  }
-}
 
-// --- Keep Finnhub subscriptions matched to the current watch list ---
-function updateSubscriptions() {
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const needed = new Set(watchList.keys());
 
-  for (const sym of currentSubscriptions) {
-    if (!needed.has(sym)) {
-      ws.send(JSON.stringify({ type: "unsubscribe", symbol: sym }));
-      currentSubscriptions.delete(sym);
-    }
-  }
-  for (const sym of needed) {
-    if (!currentSubscriptions.has(sym)) {
-      ws.send(JSON.stringify({ type: "subscribe", symbol: sym }));
-      currentSubscriptions.add(sym);
-    }
-  }
-}
+    // --------------------------------------------------------
+    // 2. PRESS 1 — +$200
+    // --------------------------------------------------------
 
-// --- Check a live tick against the watched stop; fire an urgent close if crossed ---
-async function handleTick(symbol, price) {
-  const pos = watchList.get(symbol);
-  if (!pos) return;
+    if (
+      !position.pressed_1r &&
+      hitsProfitLevel(
+        position,
+        price,
+        position.trigger_press1_price
+      )
+    ) {
 
-  const crossed = pos.side === "long" ? price <= pos.stop : price >= pos.stop;
-  if (!crossed) return;
+      const response =
+        await fireEvent(
+          position.id,
+          symbol,
+          price,
+          "press1"
+        );
 
-  watchList.delete(symbol);
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "unsubscribe", symbol }));
-    currentSubscriptions.delete(symbol);
-  }
+      if (response?.not_found) {
+        dropPosition(
+          symbol,
+          "position_not_found"
+        );
+        return;
+      }
 
-  console.log(`STOP CROSSED: ${symbol} ${pos.side} stop=${pos.stop} tick=${price} — closing now`);
-
-  try {
-    const res = await fetch(`${BASE44_APP_URL}/api/functions/realtimeStopClose`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${BASE44_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        positionId: pos.positionId,
+      syncFromResponse(
         symbol,
-        realtimePrice: price,
-      }),
-    });
-    if (!res.ok) {
-      console.error(`Close request failed for ${symbol}: ${res.status} ${await res.text()}`);
-    } else {
-      console.log(`Close confirmed for ${symbol}.`);
+        response
+      );
+
+      if (isClosedResponse(response)) {
+        dropPosition(
+          symbol,
+          "closed_after_press1"
+        );
+        return;
+      }
+
+      position =
+        positions.get(symbol);
+
+      if (!position) return;
     }
+
+
+    // --------------------------------------------------------
+    // 3. PRESS 2 — +$400
+    //
+    // Uses the NEW trigger levels returned after press1.
+    // --------------------------------------------------------
+
+    if (
+      position.pressed_1r &&
+      !position.pressed_2r &&
+      hitsProfitLevel(
+        position,
+        price,
+        position.trigger_press2_price
+      )
+    ) {
+
+      const response =
+        await fireEvent(
+          position.id,
+          symbol,
+          price,
+          "press2"
+        );
+
+      if (response?.not_found) {
+        dropPosition(
+          symbol,
+          "position_not_found"
+        );
+        return;
+      }
+
+      syncFromResponse(
+        symbol,
+        response
+      );
+
+      if (isClosedResponse(response)) {
+        dropPosition(
+          symbol,
+          "closed_after_press2"
+        );
+        return;
+      }
+
+      position =
+        positions.get(symbol);
+
+      if (!position) return;
+    }
+
+
+    // --------------------------------------------------------
+    // 4. EXIT AT +$900
+    //
+    // Uses the final levels returned after any presses.
+    // --------------------------------------------------------
+
+    if (
+      hitsProfitLevel(
+        position,
+        price,
+        position.trigger_exit_price
+      )
+    ) {
+
+      const response =
+        await fireEvent(
+          position.id,
+          symbol,
+          price,
+          "exit_900"
+        );
+
+      if (response?.not_found) {
+        dropPosition(
+          symbol,
+          "position_not_found"
+        );
+        return;
+      }
+
+      syncFromResponse(
+        symbol,
+        response
+      );
+
+      if (isClosedResponse(response)) {
+        dropPosition(
+          symbol,
+          "exit_900"
+        );
+        return;
+      }
+    }
+
   } catch (err) {
-    console.error(`Close request error for ${symbol}:`, err.message);
+
+    console.error(
+      `[tick] ${symbol} error:`,
+      err.message
+    );
+
+  } finally {
+
+    busy.delete(symbol);
   }
 }
 
-// --- Finnhub WebSocket connection, with auto-reconnect ---
-function connect() {
-  ws = new WebSocket(`wss://ws.finnhub.io?token=${FINNHUB_API_KEY}`);
+
+// ------------------------------------------------------------
+// FINNHUB WEBSOCKET
+// ------------------------------------------------------------
+
+function wsSend(message) {
+  if (
+    ws &&
+    ws.readyState === WebSocket.OPEN
+  ) {
+    ws.send(
+      JSON.stringify(message)
+    );
+  }
+}
+
+
+function connectWebSocket() {
+  console.log(
+    "Connecting to Finnhub WebSocket..."
+  );
+
+  ws =
+    new WebSocket(
+      FINNHUB_WS_URL
+    );
+
 
   ws.on("open", () => {
-    console.log("Connected to Finnhub WebSocket.");
-    currentSubscriptions = new Set();
-    updateSubscriptions();
-  });
 
-  ws.on("message", (raw) => {
-    let msg;
-    try { msg = JSON.parse(raw.toString()); } catch (_) { return; }
-    if (msg.type !== "trade" || !Array.isArray(msg.data)) return;
-    for (const tick of msg.data) {
-      handleTick(String(tick.s).toUpperCase(), Number(tick.p));
+    reconnectAttempts = 0;
+
+    console.log(
+      "Connected to Finnhub WebSocket"
+    );
+
+    // Re-subscribe everything after reconnect.
+    for (
+      const symbol
+      of positions.keys()
+    ) {
+
+      wsSend({
+        type: "subscribe",
+        symbol,
+      });
     }
   });
 
-  ws.on("close", () => {
-    console.log(`WebSocket closed. Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`);
-    setTimeout(connect, RECONNECT_DELAY_MS);
+
+  ws.on("message", raw => {
+
+    let message;
+
+    try {
+      message =
+        JSON.parse(
+          raw.toString()
+        );
+    } catch (_) {
+      return;
+    }
+
+
+    if (
+      message.type === "trade" &&
+      Array.isArray(message.data)
+    ) {
+
+      for (
+        const trade
+        of message.data
+      ) {
+
+        const symbol =
+          String(
+            trade.s || ""
+          ).toUpperCase();
+
+        const price =
+          Number(
+            trade.p
+          );
+
+        if (
+          symbol &&
+          Number.isFinite(price) &&
+          price > 0
+        ) {
+
+          evaluateTick(
+            symbol,
+            price
+          );
+        }
+      }
+
+      return;
+    }
+
+
+    if (
+      message.type === "error"
+    ) {
+
+      console.error(
+        "[ws] Finnhub error:",
+        message.msg
+      );
+    }
   });
 
-  ws.on("error", (err) => {
-    console.error("WebSocket error:", err.message);
+
+  ws.on("close", () => {
+
+    console.log(
+      "Finnhub WebSocket disconnected"
+    );
+
+    scheduleReconnect();
+  });
+
+
+  ws.on("error", err => {
+
+    console.error(
+      "[ws] error:",
+      err.message
+    );
   });
 }
 
-// --- Start up ---
-console.log("Starting real-time stop-monitoring worker...");
-syncOpenPositions().then(() => {
-  connect();
-  setInterval(syncOpenPositions, SYNC_INTERVAL_MS);
+
+// ------------------------------------------------------------
+// RECONNECT
+// ------------------------------------------------------------
+
+function scheduleReconnect() {
+
+  if (reconnectTimer) {
+    return;
+  }
+
+  reconnectAttempts++;
+
+  const delay =
+    Math.min(
+      RECONNECT_MAX_MS,
+      RECONNECT_BASE_MS *
+      Math.pow(
+        2,
+        reconnectAttempts - 1
+      )
+    );
+
+  console.log(
+    `[ws] reconnecting in ${delay} ms`
+  );
+
+  reconnectTimer =
+    setTimeout(() => {
+
+      reconnectTimer = null;
+
+      connectWebSocket();
+
+    }, delay);
+}
+
+
+// ------------------------------------------------------------
+// START
+// ------------------------------------------------------------
+
+async function start() {
+
+  console.log(
+    "Starting DART real-time stop/press/exit worker (paper, USD)..."
+  );
+
+  // Discover any Position already open.
+  await syncWithBase44();
+
+  // Start live Finnhub feed.
+  connectWebSocket();
+
+  // Discover newly opened Positions quickly.
+  setInterval(
+    syncWithBase44,
+    SYNC_INTERVAL_MS
+  );
+}
+
+
+start().catch(err => {
+
+  console.error(
+    "Worker startup failed:",
+    err
+  );
+
+  process.exit(1);
 });
