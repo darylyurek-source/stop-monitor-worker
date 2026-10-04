@@ -615,7 +615,7 @@ function connectWebSocket() {
 
   ws.on("open", () => {
 
-    reconnectAttempts = 0;
+  
 
     console.log(
       "Connected to Finnhub WebSocket"
