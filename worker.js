@@ -674,7 +674,7 @@ console.log("[tick] Finnhub message received");
           Number.isFinite(price) &&
           price > 0
         ) {
-
+console.log(`[price] ${symbol} ${price}`);
           evaluateTick(
             symbol,
             price
