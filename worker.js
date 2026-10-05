@@ -636,7 +636,7 @@ function connectWebSocket() {
 
 
   ws.on("message", raw => {
-
+console.log("[tick] Finnhub message received");
     let message;
 
     try {
