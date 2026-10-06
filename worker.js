@@ -59,7 +59,7 @@ let reconnecftAttempts = 0;
 // ------------------------------------------------------------
 
 async function fetchOpenPositions() {
-  const res = await fetch(POSITIONS_ENDPOINT, {
+ const res = await fetch(POSITION_ENDPOINT, {
     headers: {
       Authorization: `Bearer ${BASE44_API_KEY}`,
       "Content-Type": "application/json",
