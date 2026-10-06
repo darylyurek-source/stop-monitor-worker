@@ -728,7 +728,7 @@ function scheduleReconnect() {
     return;
   }
 
-  reconnectAttempts++;
+  globalThis.reconnectAttempts = (globalThis.reconnectAttempts || 0) + 1;
 
   const delay =
     Math.min(
@@ -736,7 +736,7 @@ function scheduleReconnect() {
       RECONNECT_BASE_MS *
       Math.pow(
         2,
-        reconnectAttempts - 1
+     globalThis.reconnectAttempts - 1
       )
     );
 
