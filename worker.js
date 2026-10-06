@@ -73,10 +73,10 @@ async function fetchOpenPositions() {
   }
 
   const body = await res.json();
-
+if (Array.isArray(body.positions)) return body.positions;
   if (Array.isArray(body)) return body;
-  if (Array.isArray(body.items)) return body.items;
-  if (Array.isArray(body.data)) return body.data;
+if (Array.isArray(body.items)) return body.items;
+if (Array.isArray(body.data)) return body.data;
 
   return [];
 }
