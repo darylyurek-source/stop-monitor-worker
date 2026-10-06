@@ -34,8 +34,8 @@ const EVENT_ENDPOINT =
 
 // IMPORTANT:
 // Preserve the exact Position endpoint already proven to work in this worker.
-const POSITIONS_ENDPOINT =
-  `${BASE44_APP_URL}/api/entities/Position?status=open`;
+const POSITION_ENDPOINT =
+  `${BASE44_APP_URL}/functions/getMonitoringState`;
 
 // Check Base44 frequently so newly opened positions begin real-time monitoring quickly.
 const SYNC_INTERVAL_MS = 15000;
