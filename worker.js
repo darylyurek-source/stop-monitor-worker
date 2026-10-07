@@ -1,14 +1,22 @@
-// worker.js — Render stop-monitor-worker for Dart A live forward-test (PAPER).
+Here's the complete updated `worker.js`:
+
+```js
+// worker.js — Render tick-router for DART A/B/C live forward-test (PAPER).
 //
 // Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
-// quiet symbols). Base44 owns ALL trading math. This worker only watches the
-// stored trigger prices and sends events to Base44.
+// quiet symbols). Base44 owns ALL trading math — dartLiveA, dartLiveB and
+// dartLiveC each compute stops, presses, exits and (for B/C) the Vector 65
+// from the live tick P&L. This worker discovers open positions across all
+// three systems from getMonitoringStateAll, subscribes to each unique symbol
+// once, and routes every tick to the handler specified for each position.
 //
-// Real-time events:
-//   stop      = -$1,700
-//   press1    = +$200
-//   press2    = +$400
-//   exit_900  = +$900
+// The same symbol can be open in A, B and C at the same time; each tick for
+// that symbol is forwarded independently to each system's handler.
+//
+// Handler contract (identical for dartLiveA / dartLiveB / dartLiveC):
+//   POST {BASE44_APP_URL}/functions/{handler}
+//   Authorization: Bearer <BASE44_API_KEY>
+//   body: { positionId, symbol, realtimePrice }
 //
 // Paper trading only. All values are USD.
 
@@ -28,12 +36,10 @@ if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
 
 const FINNHUB_WS_URL = "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
 
-const EVENT_ENDPOINT =
-  `${BASE44_APP_URL}/api/functions/realtimeStopClose`;
-
-// IMPORTANT: preserve the exact Position endpoint already proven to work.
-const POSITION_ENDPOINT =
-  `${BASE44_APP_URL}/functions/getMonitoringState`;
+// Consolidated monitoring endpoint — returns open positions for A, B and C
+// in one response, each with its `system` and `handler` routing field.
+const MONITOR_ENDPOINT =
+  `${BASE44_APP_URL}/functions/getMonitoringStateAll`;
 
 const SYNC_INTERVAL_MS = 15000;
 const RECONNECT_BASE_MS = 1000;
@@ -43,13 +49,13 @@ const RECONNECT_MAX_MS = 30000;
 const POLL_LOOP_MS = 3000;
 const QUIET_TICK_MS = 8000;
 
-// symbol -> current Base44 Position state
-const positions = new Map();
+// symbol -> Array<{ positionId, handler, system }>
+const symbolPositions = new Map();
 
 // symbol -> ms of last price seen (WS tick or REST quote)
 const lastTick = new Map();
 
-// Prevent simultaneous event requests for the same Position.
+// positionId -> true while a tick request is in flight (prevents double-fire)
 const busy = new Set();
 
 let ws = null;
@@ -58,11 +64,11 @@ let reconnectAttempts = 0;
 
 
 // ------------------------------------------------------------
-// BASE44 POSITION SYNC
+// BASE44 POSITION SYNC (A + B + C)
 // ------------------------------------------------------------
 
 async function fetchOpenPositions() {
-  const res = await fetch(POSITION_ENDPOINT, {
+  const res = await fetch(MONITOR_ENDPOINT, {
     headers: {
       Authorization: `Bearer ${BASE44_API_KEY}`,
       "Content-Type": "application/json",
@@ -70,7 +76,7 @@ async function fetchOpenPositions() {
   });
 
   if (!res.ok) {
-    throw new Error(`Base44 positions HTTP ${res.status} ${res.statusText}`);
+    throw new Error(`getMonitoringStateAll HTTP ${res.status} ${res.statusText}`);
   }
 
   const body = await res.json();
@@ -84,49 +90,53 @@ async function fetchOpenPositions() {
 async function syncWithBase44() {
   try {
     const items = await fetchOpenPositions();
-    const seen = new Set();
+
+    // Build the new symbol -> positions map from the response.
+    const next = new Map();
+    const seenSymbols = new Set();
+    let countA = 0, countB = 0, countC = 0;
 
     for (const it of items) {
       const symbol = String(it.symbol || "").toUpperCase();
       if (!symbol) continue;
-      seen.add(symbol);
+      seenSymbols.add(symbol);
 
-      const state = {
-        id: it.id,
-        symbol,
-        side: String(it.side || "").toLowerCase(),
-        status: it.status,
-        shares: it.shares,
-        weighted_avg_cost: it.weighted_avg_cost,
-        pressed_1r: !!it.pressed_1r,
-        pressed_2r: !!it.pressed_2r,
-        current_stop: numberOrNull(it.current_stop),
-        trigger_press1_price: numberOrNull(it.trigger_press1_price),
-        trigger_press2_price: numberOrNull(it.trigger_press2_price),
-        trigger_exit_price: numberOrNull(it.trigger_exit_price),
-      };
+      const system = String(it.system || "").toUpperCase();
+      const handler = String(it.handler || "");
+      const positionId = String(it.id || "");
+      if (!positionId || !handler) continue;
 
-      const existing = positions.get(symbol);
-      if (!existing) {
-        positions.set(symbol, state);
+      if (system === "A") countA++;
+      else if (system === "B") countB++;
+      else if (system === "C") countC++;
+
+      if (!next.has(symbol)) next.set(symbol, []);
+      next.get(symbol).push({ positionId, handler, system });
+    }
+
+    // Subscribe to newly seen symbols, unsubscribe from dropped ones.
+    const prevSymbols = new Set(symbolPositions.keys());
+    for (const symbol of seenSymbols) {
+      if (!prevSymbols.has(symbol)) {
         wsSend({ type: "subscribe", symbol });
-        console.log(`[sync] + ${symbol} side=${state.side}`);
-      } else {
-        // Base44 is authoritative.
-        Object.assign(existing, state);
+        console.log(`[sync] + ${symbol}`);
+      }
+    }
+    for (const symbol of prevSymbols) {
+      if (!seenSymbols.has(symbol)) {
+        wsSend({ type: "unsubscribe", symbol });
+        lastTick.delete(symbol);
+        console.log(`[sync] - ${symbol} (no longer open)`);
       }
     }
 
-    // Remove anything Base44 no longer reports as open.
-    for (const symbol of Array.from(positions.keys())) {
-      if (!seen.has(symbol)) {
-        dropPosition(symbol, "closed_on_base44");
-      }
-    }
+    symbolPositions.clear();
+    for (const [k, v] of next) symbolPositions.set(k, v);
 
     console.log(
-      `[sync] ${positions.size} open position(s): ` +
-        (positions.size ? Array.from(positions.keys()).join(", ") : "(none)")
+      `[sync] ${symbolPositions.size} symbol(s), ${items.length} position(s) ` +
+      `[A=${countA} B=${countB} C=${countC}]` +
+      (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
   } catch (err) {
     console.error("[sync] error:", err.message);
@@ -144,284 +154,73 @@ function numberOrNull(value) {
   return Number.isFinite(n) ? n : null;
 }
 
-function isLong(position) {
-  return position.side === "long";
-}
-
-function hitsStop(position, price) {
-  if (position.current_stop == null) return false;
-  return isLong(position)
-    ? price <= position.current_stop
-    : price >= position.current_stop;
-}
-
-function hitsProfitLevel(position, price, level) {
-  if (level == null) return false;
-  return isLong(position) ? price >= level : price <= level;
+function fmt(n) {
+  if (n == null || !Number.isFinite(Number(n))) return "n/a";
+  return Number(n).toFixed(2);
 }
 
 
 // ------------------------------------------------------------
-// BASE44 REAL-TIME EVENT
+// TICK ROUTING — forward one tick to one position's handler
 // ------------------------------------------------------------
 
-async function fireEvent(positionId, symbol, realtimePrice, event) {
-  const res = await fetch(EVENT_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${BASE44_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      positionId,
-      symbol,
-      realtimePrice,
-      event,
-    }),
-  });
-
-  let body = null;
+async function forwardTick(ref, symbol, price) {
+  // One in-flight request per positionId (prevents double-fire).
+  if (busy.has(ref.positionId)) return;
+  busy.add(ref.positionId);
 
   try {
-    body = await res.json();
-  } catch (_) {
-    // Leave body null if Base44 returned no JSON.
-  }
-
-  if (res.status === 404) {
-    console.log(`[event] ${symbol} ${event}: position not found`);
-    return { not_found: true };
-  }
-
-  if (res.status === 409) {
-    console.error(`[event] ${symbol} ${event}: symbol mismatch`, body);
-    return { symbol_mismatch: true, ...body };
-  }
-
-  if (!res.ok) {
-    throw new Error(
-      `Base44 event HTTP ${res.status}: ${JSON.stringify(body)}`
-    );
-  }
-
-  return body;
-}
-
-
-// ------------------------------------------------------------
-// APPLY BASE44 RESPONSE TO LOCAL STATE
-// ------------------------------------------------------------
-
-function syncFromResponse(symbol, response) {
-  if (!response) return;
-
-  const position = positions.get(symbol);
-  if (!position) return;
-
-  if (response.shares !== undefined)
-    position.shares = response.shares;
-
-  if (response.weighted_avg_cost !== undefined)
-    position.weighted_avg_cost = response.weighted_avg_cost;
-
-  if (response.current_stop !== undefined)
-    position.current_stop = numberOrNull(response.current_stop);
-
-  if (response.trigger_press1_price !== undefined)
-    position.trigger_press1_price =
-      numberOrNull(response.trigger_press1_price);
-
-  if (response.trigger_press2_price !== undefined)
-    position.trigger_press2_price =
-      numberOrNull(response.trigger_press2_price);
-
-  if (response.trigger_exit_price !== undefined)
-    position.trigger_exit_price =
-      numberOrNull(response.trigger_exit_price);
-
-  if (typeof response.pressed_1r === "boolean")
-    position.pressed_1r = response.pressed_1r;
-
-  if (typeof response.pressed_2r === "boolean")
-    position.pressed_2r = response.pressed_2r;
-
-  if (typeof response.status === "string")
-    position.status = response.status;
-}
-
-function isClosedResponse(response) {
-  return (
-    !!response &&
-    (
-      response.status === "closed" ||
-      response.closed === true ||
-      response.already_closed === true
-    )
-  );
-}
-
-
-// ------------------------------------------------------------
-// REMOVE POSITION FROM REAL-TIME MONITOR
-// ------------------------------------------------------------
-
-function dropPosition(symbol, reason) {
-  if (!positions.has(symbol)) return;
-
-  positions.delete(symbol);
-  busy.delete(symbol);
-  lastTick.delete(symbol);
-
-  wsSend({ type: "unsubscribe", symbol });
-
-  console.log(`[drop] ${symbol} (${reason})`);
-}
-
-
-// ------------------------------------------------------------
-// REAL-TIME TICK PROCESSING
-//
-// ORDER: stop -> press1 -> press2 -> exit_900
-// After every event, Base44 returns the new levels, which are used
-// before evaluating the next event.
-// ------------------------------------------------------------
-
-async function evaluateTick(symbol, price) {
-  lastTick.set(symbol, Date.now());
-
-  let position = positions.get(symbol);
-
-  if (!position) return;
-  if (position.status !== "open") return;
-
-  // Only one event chain per Position at a time.
-  if (busy.has(symbol)) return;
-
-  busy.add(symbol);
-
-  try {
-    // 1. HARD STOP
-    if (hitsStop(position, price)) {
-      const response = await fireEvent(
-        position.id,
+    const res = await fetch(`${BASE44_APP_URL}/functions/${ref.handler}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${BASE44_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        positionId: ref.positionId,
         symbol,
-        price,
-        "stop"
-      );
+        realtimePrice: price,
+      }),
+    });
 
-      if (response?.not_found) {
-        dropPosition(symbol, "position_not_found");
-        return;
-      }
+    let body = null;
+    try { body = await res.json(); } catch (_) {}
 
-      syncFromResponse(symbol, response);
-
-      if (isClosedResponse(response))
-        dropPosition(symbol, "stop_hit");
-
+    if (res.status === 404) {
+      console.log(`[${ref.system}] ${symbol} -> ${ref.handler}: position not found`);
+      return;
+    }
+    if (res.status === 409) {
+      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: symbol mismatch`, body);
+      return;
+    }
+    if (!res.ok) {
+      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: HTTP ${res.status} ${JSON.stringify(body)}`);
       return;
     }
 
-    // 2. PRESS 1 — +$200
-    if (
-      !position.pressed_1r &&
-      hitsProfitLevel(
-        position,
-        price,
-        position.trigger_press1_price
-      )
-    ) {
-      const response = await fireEvent(
-        position.id,
-        symbol,
-        price,
-        "press1"
-      );
-
-      if (response?.not_found) {
-        dropPosition(symbol, "position_not_found");
-        return;
-      }
-
-      syncFromResponse(symbol, response);
-
-      if (isClosedResponse(response)) {
-        dropPosition(symbol, "closed_after_press1");
-        return;
-      }
-
-      position = positions.get(symbol);
-      if (!position) return;
+    // Log meaningful events only. Holds are silent.
+    if (body?.closed) {
+      console.log(`[${ref.system}] ${symbol} ${ref.handler}: CLOSED ${body.exit_reason || ""} pl=${fmt(body.pl)} net=${fmt(body.net_pl)}`);
+    } else if (body?.applied) {
+      console.log(`[${ref.system}] ${symbol} ${ref.handler}: ${body.event || "applied"} pl=${fmt(body.pl)}`);
     }
-
-    // 3. PRESS 2 — +$400
-    if (
-      position.pressed_1r &&
-      !position.pressed_2r &&
-      hitsProfitLevel(
-        position,
-        price,
-        position.trigger_press2_price
-      )
-    ) {
-      const response = await fireEvent(
-        position.id,
-        symbol,
-        price,
-        "press2"
-      );
-
-      if (response?.not_found) {
-        dropPosition(symbol, "position_not_found");
-        return;
-      }
-
-      syncFromResponse(symbol, response);
-
-      if (isClosedResponse(response)) {
-        dropPosition(symbol, "closed_after_press2");
-        return;
-      }
-
-      position = positions.get(symbol);
-      if (!position) return;
-    }
-
-    // 4. EXIT AT +$900
-    if (
-      hitsProfitLevel(
-        position,
-        price,
-        position.trigger_exit_price
-      )
-    ) {
-      const response = await fireEvent(
-        position.id,
-        symbol,
-        price,
-        "exit_900"
-      );
-
-      if (response?.not_found) {
-        dropPosition(symbol, "position_not_found");
-        return;
-      }
-
-      syncFromResponse(symbol, response);
-
-      if (isClosedResponse(response)) {
-        dropPosition(symbol, "exit_900");
-        return;
-      }
-    }
+    // already_closed / already_applied / hold: silent.
   } catch (err) {
-    console.error(
-      `[tick] ${symbol} error:`,
-      err.message
-    );
+    console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: ${err.message}`);
   } finally {
-    busy.delete(symbol);
+    busy.delete(ref.positionId);
   }
+}
+
+async function routeTick(symbol, price) {
+  lastTick.set(symbol, Date.now());
+
+  const refs = symbolPositions.get(symbol);
+  if (!refs || refs.length === 0) return;
+
+  // A, B, C are independent — forward in parallel.
+  await Promise.allSettled(refs.map((ref) => forwardTick(ref, symbol, price)));
 }
 
 
@@ -447,11 +246,8 @@ function connectWebSocket() {
     console.log("Connected to Finnhub WebSocket");
 
     // Re-subscribe everything after reconnect.
-    for (const symbol of positions.keys()) {
-      wsSend({
-        type: "subscribe",
-        symbol,
-      });
+    for (const symbol of symbolPositions.keys()) {
+      wsSend({ type: "subscribe", symbol });
     }
   });
 
@@ -464,22 +260,13 @@ function connectWebSocket() {
       return;
     }
 
-    if (
-      message.type === "trade" &&
-      Array.isArray(message.data)
-    ) {
+    if (message.type === "trade" && Array.isArray(message.data)) {
       for (const trade of message.data) {
-        const symbol =
-          String(trade.s || "").toUpperCase();
-
+        const symbol = String(trade.s || "").toUpperCase();
         const price = Number(trade.p);
 
-        if (
-          symbol &&
-          Number.isFinite(price) &&
-          price > 0
-        ) {
-          evaluateTick(symbol, price);
+        if (symbol && Number.isFinite(price) && price > 0) {
+          routeTick(symbol, price);
         }
       }
 
@@ -487,27 +274,17 @@ function connectWebSocket() {
     }
 
     if (message.type === "error") {
-      console.error(
-        "[ws] Finnhub error:",
-        message.msg
-      );
+      console.error("[ws] Finnhub error:", message.msg);
     }
   });
 
   ws.on("close", () => {
-    console.log(
-      "Finnhub WebSocket disconnected"
-    );
-
+    console.log("Finnhub WebSocket disconnected");
     scheduleReconnect();
   });
 
   ws.on("error", (err) => {
-    console.error(
-      "[ws] error:",
-      err.message
-    );
-
+    console.error("[ws] error:", err.message);
     scheduleReconnect();
   });
 }
@@ -524,13 +301,10 @@ function scheduleReconnect() {
 
   const delay = Math.min(
     RECONNECT_MAX_MS,
-    RECONNECT_BASE_MS *
-      Math.pow(2, reconnectAttempts - 1)
+    RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1)
   );
 
-  console.log(
-    `[ws] reconnecting in ${delay} ms (attempt ${reconnectAttempts})`
-  );
+  console.log(`[ws] reconnecting in ${delay} ms (attempt ${reconnectAttempts})`);
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -544,17 +318,16 @@ function scheduleReconnect() {
 //
 // Finnhub's WebSocket only emits a tick when a trade prints.
 // For any tracked symbol that hasn't ticked in QUIET_TICK_MS,
-// pull a price from REST /quote and run the same evaluation.
+// pull a price from REST /quote and run the same routing.
 // ------------------------------------------------------------
 
 async function pollQuietSymbols() {
   const now = Date.now();
 
-  for (const symbol of positions.keys()) {
+  for (const symbol of symbolPositions.keys()) {
     const last = lastTick.get(symbol) || 0;
 
-    if (now - last < QUIET_TICK_MS)
-      continue;
+    if (now - last < QUIET_TICK_MS) continue;
 
     try {
       const res = await fetch(
@@ -567,13 +340,10 @@ async function pollQuietSymbols() {
       const price = numberOrNull(q && q.c);
 
       if (price && price > 0) {
-        evaluateTick(symbol, price);
+        routeTick(symbol, price);
       }
     } catch (err) {
-      console.error(
-        `[quote] ${symbol} error:`,
-        err.message
-      );
+      console.error(`[quote] ${symbol} error:`, err.message);
     }
   }
 }
@@ -584,34 +354,25 @@ async function pollQuietSymbols() {
 // ------------------------------------------------------------
 
 async function start() {
-  console.log(
-    "Starting DART real-time stop/press/exit worker (paper, USD)..."
-  );
+  console.log("Starting DART A/B/C real-time tick router (paper, USD)...");
 
-  // Discover any Position already open.
+  // Discover open positions across A, B and C.
   await syncWithBase44();
 
   // Start live Finnhub feed.
   connectWebSocket();
 
-  // Discover newly opened Positions quickly.
-  setInterval(
-    syncWithBase44,
-    SYNC_INTERVAL_MS
-  );
+  // Discover newly opened / replacement positions quickly.
+  setInterval(syncWithBase44, SYNC_INTERVAL_MS);
 
-  // Catch stops on quiet symbols.
-  setInterval(
-    pollQuietSymbols,
-    POLL_LOOP_MS
-  );
+  // Catch events on quiet symbols.
+  setInterval(pollQuietSymbols, POLL_LOOP_MS);
 }
 
 start().catch((err) => {
-  console.error(
-    "Worker startup failed:",
-    err
-  );
-
+  console.error("Worker startup failed:", err);
   process.exit(1);
 });
+```
+
+Copy this to Render — no env var changes needed.
