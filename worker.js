@@ -1,10 +1,7 @@
-Here's the complete updated `worker.js`:
-
-```js
-// worker.js — Render tick-router for DART A/B/C live forward-test (PAPER).
+// worker.js - Render tick-router for DART A/B/C live forward-test (PAPER).
 //
 // Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
-// quiet symbols). Base44 owns ALL trading math — dartLiveA, dartLiveB and
+// quiet symbols). Base44 owns ALL trading math - dartLiveA, dartLiveB and
 // dartLiveC each compute stops, presses, exits and (for B/C) the Vector 65
 // from the live tick P&L. This worker discovers open positions across all
 // three systems from getMonitoringStateAll, subscribes to each unique symbol
@@ -36,7 +33,7 @@ if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
 
 const FINNHUB_WS_URL = "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
 
-// Consolidated monitoring endpoint — returns open positions for A, B and C
+// Consolidated monitoring endpoint - returns open positions for A, B and C
 // in one response, each with its `system` and `handler` routing field.
 const MONITOR_ENDPOINT =
   `${BASE44_APP_URL}/functions/getMonitoringStateAll`;
@@ -122,6 +119,7 @@ async function syncWithBase44() {
         console.log(`[sync] + ${symbol}`);
       }
     }
+
     for (const symbol of prevSymbols) {
       if (!seenSymbols.has(symbol)) {
         wsSend({ type: "unsubscribe", symbol });
@@ -161,7 +159,7 @@ function fmt(n) {
 
 
 // ------------------------------------------------------------
-// TICK ROUTING — forward one tick to one position's handler
+// TICK ROUTING - forward one tick to one position's handler
 // ------------------------------------------------------------
 
 async function forwardTick(ref, symbol, price) {
@@ -190,10 +188,12 @@ async function forwardTick(ref, symbol, price) {
       console.log(`[${ref.system}] ${symbol} -> ${ref.handler}: position not found`);
       return;
     }
+
     if (res.status === 409) {
       console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: symbol mismatch`, body);
       return;
     }
+
     if (!res.ok) {
       console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: HTTP ${res.status} ${JSON.stringify(body)}`);
       return;
@@ -219,7 +219,7 @@ async function routeTick(symbol, price) {
   const refs = symbolPositions.get(symbol);
   if (!refs || refs.length === 0) return;
 
-  // A, B, C are independent — forward in parallel.
+  // A, B, C are independent - forward in parallel.
   await Promise.allSettled(refs.map((ref) => forwardTick(ref, symbol, price)));
 }
 
@@ -373,6 +373,3 @@ start().catch((err) => {
   console.error("Worker startup failed:", err);
   process.exit(1);
 });
-```
-
-Copy this to Render — no env var changes needed.
