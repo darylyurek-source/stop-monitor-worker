@@ -1,14 +1,16 @@
-// worker.js - Render tick-router for DART A/B/C live forward-test (PAPER).
+
+// worker.js - Render tick-router for DART New A / B / C / A+ live forward-test (PAPER).
 //
 // Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
-// quiet symbols). Base44 owns ALL trading math - dartLiveA, dartLiveB and
-// dartLiveC each compute stops, presses, exits and (for B/C) the Vector 65
-// from the live tick P&L. This worker discovers open positions across all
-// three systems from getMonitoringStateAll, subscribes to each unique symbol
+// quiet symbols). Base44 owns ALL trading math - dartLiveNewA, dartLiveB,
+// dartLiveC and dartLiveAPlus each compute stops, presses, exits and the
+// Vector 65 from the live tick P&L. This worker discovers open positions across
+// all four systems from getMonitoringStateAll, subscribes to each unique symbol
 // once, and routes every tick to the handler specified for each position.
 //
-// The same symbol can be open in A, B and C at the same time; each tick for
-// that symbol is forwarded independently to each system's handler.
+// The same symbol can be open in New A, B, C and A+ at the same time; each tick
+// for that symbol is forwarded independently to each system's handler. No
+// duplicate quote requests — each unique symbol is subscribed once.
 //
 // Handler contract (identical for dartLiveA / dartLiveB / dartLiveC):
 //   POST {BASE44_APP_URL}/functions/{handler}
@@ -41,6 +43,12 @@ const MONITOR_ENDPOINT =
 const SYNC_INTERVAL_MS = 15000;
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
+
+// Hard timeout for each tick-forward HTTP request. If the Base44 handler
+// never returns (platform stalls, dropped connection), the AbortController
+// fires after this many ms so busy.delete(positionId) always runs and the
+// position is never permanently locked out of tick processing.
+const TICK_TIMEOUT_MS = 15000;
 
 // REST /quote fallback for symbols that haven't ticked on the WebSocket.
 const POLL_LOOP_MS = 3000;
@@ -91,7 +99,7 @@ async function syncWithBase44() {
     // Build the new symbol -> positions map from the response.
     const next = new Map();
     const seenSymbols = new Set();
-    let countA = 0, countB = 0, countC = 0;
+    let countA = 0, countB = 0, countC = 0, countAPlus = 0;
 
     for (const it of items) {
       const symbol = String(it.symbol || "").toUpperCase();
@@ -103,9 +111,10 @@ async function syncWithBase44() {
       const positionId = String(it.id || "");
       if (!positionId || !handler) continue;
 
-      if (system === "A") countA++;
+      if (system === "ANEW") countA++;
       else if (system === "B") countB++;
       else if (system === "C") countC++;
+      else if (system === "APLUS") countAPlus++;
 
       if (!next.has(symbol)) next.set(symbol, []);
       next.get(symbol).push({ positionId, handler, system });
@@ -119,7 +128,6 @@ async function syncWithBase44() {
         console.log(`[sync] + ${symbol}`);
       }
     }
-
     for (const symbol of prevSymbols) {
       if (!seenSymbols.has(symbol)) {
         wsSend({ type: "unsubscribe", symbol });
@@ -133,7 +141,7 @@ async function syncWithBase44() {
 
     console.log(
       `[sync] ${symbolPositions.size} symbol(s), ${items.length} position(s) ` +
-      `[A=${countA} B=${countB} C=${countC}]` +
+      `[NewA=${countA} B=${countB} C=${countC} A+=${countAPlus}]` +
       (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
   } catch (err) {
@@ -167,6 +175,11 @@ async function forwardTick(ref, symbol, price) {
   if (busy.has(ref.positionId)) return;
   busy.add(ref.positionId);
 
+  // Abort the request if the handler never responds, so the position is
+  // never permanently locked in `busy`. The finally block below always runs.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), TICK_TIMEOUT_MS);
+
   try {
     const res = await fetch(`${BASE44_APP_URL}/functions/${ref.handler}`, {
       method: "POST",
@@ -179,6 +192,7 @@ async function forwardTick(ref, symbol, price) {
         symbol,
         realtimePrice: price,
       }),
+      signal: controller.signal,
     });
 
     let body = null;
@@ -188,12 +202,10 @@ async function forwardTick(ref, symbol, price) {
       console.log(`[${ref.system}] ${symbol} -> ${ref.handler}: position not found`);
       return;
     }
-
     if (res.status === 409) {
       console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: symbol mismatch`, body);
       return;
     }
-
     if (!res.ok) {
       console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: HTTP ${res.status} ${JSON.stringify(body)}`);
       return;
@@ -207,8 +219,13 @@ async function forwardTick(ref, symbol, price) {
     }
     // already_closed / already_applied / hold: silent.
   } catch (err) {
-    console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: ${err.message}`);
+    if (err.name === "AbortError") {
+      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: tick timed out after ${TICK_TIMEOUT_MS}ms (busy cleared)`);
+    } else {
+      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: ${err.message}`);
+    }
   } finally {
+    clearTimeout(timeout);
     busy.delete(ref.positionId);
   }
 }
@@ -354,7 +371,7 @@ async function pollQuietSymbols() {
 // ------------------------------------------------------------
 
 async function start() {
-  console.log("Starting DART A/B/C real-time tick router (paper, USD)...");
+  console.log("Starting DART NewA/B/C/A+ real-time tick router (paper, USD)...");
 
   // Discover open positions across A, B and C.
   await syncWithBase44();
@@ -373,3 +390,4 @@ start().catch((err) => {
   console.error("Worker startup failed:", err);
   process.exit(1);
 });
+```
