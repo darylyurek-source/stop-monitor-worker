@@ -1,4 +1,3 @@
-
 // worker.js - Render tick-router for DART New A / B / C / A+ live forward-test (PAPER).
 //
 // Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
@@ -390,4 +389,3 @@ start().catch((err) => {
   console.error("Worker startup failed:", err);
   process.exit(1);
 });
-```
