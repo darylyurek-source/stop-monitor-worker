@@ -16,6 +16,13 @@
 //   Authorization: Bearer <BASE44_API_KEY>
 //   body: { positionId, symbol, realtimePrice }
 //
+// TICK DELIVERY: each position has its own one-slot, latest-price-wins mailbox.
+// While a position's request is in flight, arriving prices overwrite that single
+// pending slot instead of being discarded, and the pending price is sent the
+// moment the request settles - so the handler always decides on the newest price
+// and a stop crossing is never held up behind a busy request. Exactly one request
+// per position is ever in flight, so a price can never be processed twice.
+//
 // Paper trading only. All values are USD.
 
 import WebSocket from "ws";
@@ -39,14 +46,24 @@ const FINNHUB_WS_URL = "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
 const MONITOR_ENDPOINT =
   `${BASE44_APP_URL}/functions/getMonitoringStateAll`;
 
-const SYNC_INTERVAL_MS = 15000;
+// SYNC CADENCE — how often this worker asks the app for the open book. While the
+// session is live it keeps the 15-second cadence; when the app reports the market
+// closed (night, weekend, NYSE holiday, early-close day) it drops to once a minute
+// inside the trading day and once every five minutes outside it, so the poller costs
+// almost nothing while nothing can trade. The app's answer decides — no calendar is
+// duplicated here.
+const SYNC_INTERVAL_OPEN_MS = 15000;
+const SYNC_INTERVAL_CLOSED_MS = 60000;     // market closed, still inside the trading day
+const SYNC_INTERVAL_OFFHOURS_MS = 300000;  // night or weekend: five minutes
+const TRADING_DAY_FROM_MIN = 9 * 60 + 20;  // 9:20 AM ET
+const TRADING_DAY_TO_MIN = 16 * 60 + 35;   // 4:35 PM ET
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
 // Hard timeout for each tick-forward HTTP request. If the Base44 handler
 // never returns (platform stalls, dropped connection), the AbortController
-// fires after this many ms so busy.delete(positionId) always runs and the
-// position is never permanently locked out of tick processing.
+// fires after this many ms so the position is never permanently locked out of
+// tick processing - its mailbox still drains with its latest pending price.
 const TICK_TIMEOUT_MS = 15000;
 
 // REST /quote fallback for symbols that haven't ticked on the WebSocket.
@@ -59,8 +76,22 @@ const symbolPositions = new Map();
 // symbol -> ms of last price seen (WS tick or REST quote)
 const lastTick = new Map();
 
-// positionId -> true while a tick request is in flight (prevents double-fire)
-const busy = new Set();
+// positionId -> one-slot mailbox carrying that position's next price.
+//
+//   { inFlight: boolean, pending: { ref, symbol, price } | null }
+//
+// ONE SLOT, LATEST PRICE WINS. A price arriving while that position's previous
+// request is still in flight is kept - it overwrites the single pending slot -
+// and is processed the moment the in-flight request settles. No price is ever
+// discarded, so the newest price is always the one the handler decides on, and a
+// stop crossing is seen after one request round-trip instead of being skipped
+// while a request is busy. Every position has its own mailbox, so a slow handler
+// in one system never holds up another system's ticks.
+//
+// This changes WHEN a price reaches the handler, never the price itself and never
+// a trading rule: no threshold, no slippage, no fill level and no P&L is
+// computed here.
+const mailboxes = new Map();
 
 let ws = null;
 let reconnectTimer = null;
@@ -70,6 +101,33 @@ let reconnectAttempts = 0;
 // ------------------------------------------------------------
 // BASE44 POSITION SYNC (A + B + C)
 // ------------------------------------------------------------
+
+// The current ET weekday and minute-of-day. Used ONLY to choose the sync cadence.
+function etClock() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date());
+  const get = (type) => (parts.find((p) => p.type === type) || {}).value;
+  return { weekday: get("weekday"), minutes: Number(get("hour")) * 60 + Number(get("minute")) };
+}
+
+// What the app last told us: true when the monitoring endpoint reported the market
+// closed (night, weekend, NYSE holiday or after an early close).
+let marketClosed = true;
+
+// How long to wait before the next position sync.
+function nextSyncDelayMs() {
+  const { weekday, minutes } = etClock();
+  const tradingDay = weekday !== "Sat" && weekday !== "Sun";
+  if (!tradingDay || minutes < TRADING_DAY_FROM_MIN || minutes > TRADING_DAY_TO_MIN) {
+    return SYNC_INTERVAL_OFFHOURS_MS; // night or weekend
+  }
+  return marketClosed ? SYNC_INTERVAL_CLOSED_MS : SYNC_INTERVAL_OPEN_MS;
+}
 
 async function fetchOpenPositions() {
   const res = await fetch(MONITOR_ENDPOINT, {
@@ -84,6 +142,8 @@ async function fetchOpenPositions() {
   }
 
   const body = await res.json();
+  // The app decides whether the market is open; this flag only sets the cadence.
+  marketClosed = body?.market_closed === true;
   if (Array.isArray(body.positions)) return body.positions;
   if (Array.isArray(body)) return body;
   if (Array.isArray(body.items)) return body.items;
@@ -138,9 +198,19 @@ async function syncWithBase44() {
     symbolPositions.clear();
     for (const [k, v] of next) symbolPositions.set(k, v);
 
+    // Drop mailboxes whose position is no longer open. A mailbox with a request
+    // still in flight is left alone - its own pump finishes and a later sync
+    // removes the entry once it is idle - so a position can never briefly have
+    // two pumps draining it.
+    const activeIds = new Set();
+    for (const refs of next.values()) for (const ref of refs) activeIds.add(ref.positionId);
+    for (const [id, m] of mailboxes) {
+      if (!activeIds.has(id) && !m.inFlight) mailboxes.delete(id);
+    }
+
     console.log(
       `[sync] ${symbolPositions.size} symbol(s), ${items.length} position(s) ` +
-      `[NewA=${countA} B=${countB} C=${countC} A+=${countAPlus}]` +
+      `[NewA=${countA} B=${countB} C=${countC} A+=${countAPlus}] market=${marketClosed ? "closed" : "open"}` +
       (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
   } catch (err) {
@@ -169,13 +239,17 @@ function fmt(n) {
 // TICK ROUTING - forward one tick to one position's handler
 // ------------------------------------------------------------
 
+// Send ONE price to ONE position's handler and log the outcome. pumpMailbox()
+// below is the only caller and guarantees one request at a time per position,
+// so no in-flight guard is needed here and two requests for the same position
+// can never overlap.
+//
+// This function never throws - every failure is logged and returns - so a price
+// waiting in the mailbox can never be stranded behind a failed request.
 async function forwardTick(ref, symbol, price) {
-  // One in-flight request per positionId (prevents double-fire).
-  if (busy.has(ref.positionId)) return;
-  busy.add(ref.positionId);
-
-  // Abort the request if the handler never responds, so the position is
-  // never permanently locked in `busy`. The finally block below always runs.
+  // Abort the request if the handler never responds, so one stalled request
+  // cannot stop this position's mailbox from draining. The finally block below
+  // always runs.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TICK_TIMEOUT_MS);
 
@@ -219,24 +293,73 @@ async function forwardTick(ref, symbol, price) {
     // already_closed / already_applied / hold: silent.
   } catch (err) {
     if (err.name === "AbortError") {
-      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: tick timed out after ${TICK_TIMEOUT_MS}ms (busy cleared)`);
+      console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: tick timed out after ${TICK_TIMEOUT_MS}ms (mailbox continues with the latest pending price)`);
     } else {
       console.error(`[${ref.system}] ${symbol} -> ${ref.handler}: ${err.message}`);
     }
   } finally {
     clearTimeout(timeout);
-    busy.delete(ref.positionId);
   }
 }
 
-async function routeTick(symbol, price) {
+// Each position's own one-slot mailbox (created on first use).
+function mailboxFor(positionId) {
+  let m = mailboxes.get(positionId);
+  if (!m) {
+    m = { inFlight: false, pending: null };
+    mailboxes.set(positionId, m);
+  }
+  return m;
+}
+
+// Hand one price to one position. If that position has nothing in flight the
+// price starts processing immediately; otherwise it takes the single pending
+// slot, replacing whatever was waiting there (latest price wins). The replaced
+// price is not lost work - it is an older price for the same position, and the
+// newer one carries everything the handler needs to decide.
+function deliverTick(ref, symbol, price) {
+  const m = mailboxFor(ref.positionId);
+
+  if (m.inFlight) {
+    m.pending = { ref, symbol, price };
+    return;
+  }
+
+  pumpMailbox(m, { ref, symbol, price }).catch((err) => {
+    console.error(`[mailbox] ${ref.system} ${symbol}: ${err?.message || err}`);
+  });
+}
+
+// Drain one position's mailbox: send the newest price, then, as soon as that
+// request settles, send the price that arrived while it was in flight. The slot
+// is read and cleared with no await in between, so a tick can never slip in
+// between the last read and the inFlight reset below.
+async function pumpMailbox(m, first) {
+  m.inFlight = true;
+
+  let next = first;
+
+  try {
+    while (next) {
+      await forwardTick(next.ref, next.symbol, next.price);
+      next = m.pending;
+      m.pending = null;
+    }
+  } finally {
+    m.inFlight = false;
+  }
+}
+
+function routeTick(symbol, price) {
   lastTick.set(symbol, Date.now());
 
   const refs = symbolPositions.get(symbol);
   if (!refs || refs.length === 0) return;
 
-  // A, B, C are independent - forward in parallel.
-  await Promise.allSettled(refs.map((ref) => forwardTick(ref, symbol, price)));
+  // A, B, C and A+ are independent: every position gets the tick through its own
+  // mailbox, each with its own in-flight request, so a slow handler in one system
+  // never delays another system's price.
+  for (const ref of refs) deliverTick(ref, symbol, price);
 }
 
 
@@ -338,6 +461,9 @@ function scheduleReconnect() {
 // ------------------------------------------------------------
 
 async function pollQuietSymbols() {
+  // Nothing is open (off-hours, weekend or holiday) — there is nothing to poll.
+  if (symbolPositions.size === 0) return;
+
   const now = Date.now();
 
   for (const symbol of symbolPositions.keys()) {
@@ -378,8 +504,16 @@ async function start() {
   // Start live Finnhub feed.
   connectWebSocket();
 
-  // Discover newly opened / replacement positions quickly.
-  setInterval(syncWithBase44, SYNC_INTERVAL_MS);
+  // Discover newly opened / replacement positions, at a cadence that follows the
+  // market: 15 s while the session is live, once a minute while the app reports it
+  // closed inside the trading day, once every five minutes at night and on weekends.
+  function scheduleSync() {
+    setTimeout(async () => {
+      await syncWithBase44();
+      scheduleSync();
+    }, nextSyncDelayMs());
+  }
+  scheduleSync();
 
   // Catch events on quiet symbols.
   setInterval(pollQuietSymbols, POLL_LOOP_MS);
