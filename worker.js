@@ -23,6 +23,13 @@
 // and a stop crossing is never held up behind a busy request. Exactly one request
 // per position is ever in flight, so a price can never be processed twice.
 //
+// FEED DISCIPLINE: exactly one Finnhub socket is ever held. A socket that is still
+// live is never replaced, a finished one is retired before its successor opens, a
+// replaced socket's events are ignored, and the retry ladder is damped — a refused
+// handshake waits a full minute, and the backoff only resets after a connection has
+// held for a minute — so a refusal or a takeover cannot become a handshake
+// ping-pong between two clients fighting over the one stream.
+//
 // Paper trading only. All values are USD.
 
 import WebSocket from "ws";
@@ -59,6 +66,13 @@ const TRADING_DAY_FROM_MIN = 9 * 60 + 20;  // 9:20 AM ET
 const TRADING_DAY_TO_MIN = 16 * 60 + 35;   // 4:35 PM ET
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
+// A refused handshake (HTTP 429) means Finnhub is refusing a NEW connection, so it
+// gets its own fixed wait and never the short end of the ladder.
+const RECONNECT_RATE_LIMIT_MS = 60000;
+// The backoff resets only once a connection has actually held this long. A
+// connection that is accepted and taken over moments later must not re-arm the
+// 1-second retry — that is what turns a takeover into a handshake ping-pong.
+const CONNECTION_STABLE_MS = 60000;
 
 // Hard timeout for each tick-forward HTTP request. If the Base44 handler
 // never returns (platform stalls, dropped connection), the AbortController
@@ -96,6 +110,7 @@ const mailboxes = new Map();
 let ws = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let stableTimer = null;
 
 
 // ------------------------------------------------------------
@@ -374,15 +389,42 @@ function wsSend(message) {
 }
 
 function connectWebSocket() {
+  // ONE socket per process. Two sockets from the same worker fight over the same
+  // stream: Finnhub gives it to whichever connected last and refuses the other with
+  // 429, so each side's retry closes the other — a handshake ping-pong. A socket
+  // that is still live is therefore never replaced, and a finished one is retired
+  // before its successor opens.
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  if (ws) {
+    try { ws.removeAllListeners(); ws.terminate(); } catch (_) {}
+    ws = null;
+  }
+
   console.log("Connecting to Finnhub WebSocket...");
 
-  ws = new WebSocket(FINNHUB_WS_URL);
+  const socket = new WebSocket(FINNHUB_WS_URL);
+  ws = socket;
 
-  ws.on("open", () => {
-    // Reset backoff on a successful connection.
-    reconnectAttempts = 0;
+  // Every handler below belongs to THIS socket. Once a socket has been replaced its
+  // events are ignored, so a late 'close' can never schedule a retry for a socket
+  // that is no longer the current one.
+  socket.on("open", () => {
+    if (ws !== socket) return;
 
     console.log("Connected to Finnhub WebSocket");
+
+    // NOT reset here: the backoff resets only after the connection has held for
+    // CONNECTION_STABLE_MS, so being accepted and immediately taken over cannot
+    // re-arm the 1-second retry.
+    clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      if (ws === socket && socket.readyState === WebSocket.OPEN) {
+        reconnectAttempts = 0;
+        console.log(`[ws] connection stable for ${CONNECTION_STABLE_MS / 1000}s — reconnect backoff reset`);
+      }
+    }, CONNECTION_STABLE_MS);
 
     // Re-subscribe everything after reconnect.
     for (const symbol of symbolPositions.keys()) {
@@ -390,7 +432,9 @@ function connectWebSocket() {
     }
   });
 
-  ws.on("message", (raw) => {
+  socket.on("message", (raw) => {
+    if (ws !== socket) return;
+
     let message;
 
     try {
@@ -417,14 +461,31 @@ function connectWebSocket() {
     }
   });
 
-  ws.on("close", () => {
+  socket.on("close", () => {
+    if (ws !== socket) return;    // a retired socket must never drive the retry loop
+    if (socket.finished) return;  // already handled by the error path
+
     console.log("Finnhub WebSocket disconnected");
-    scheduleReconnect();
+    scheduleReconnect(false);
   });
 
-  ws.on("error", (err) => {
-    console.error("[ws] error:", err.message);
-    scheduleReconnect();
+  socket.on("error", (err) => {
+    if (ws !== socket) return;
+
+    const message = String(err?.message || "");
+    // HTTP 429 on the handshake = Finnhub refusing a new connection because one
+    // already holds the stream. Treating it like an ordinary drop is what floods
+    // the handshake endpoint.
+    const rateLimited = /\b429\b/.test(message);
+    console.error("[ws] error:", message);
+
+    // This socket is finished either way: retire it so the retry opens one clean
+    // connection instead of racing this one for the stream.
+    socket.finished = true;
+    clearTimeout(stableTimer);
+    try { socket.terminate(); } catch (_) {}
+
+    scheduleReconnect(rateLimited);
   });
 }
 
@@ -433,17 +494,21 @@ function connectWebSocket() {
 // RECONNECT
 // ------------------------------------------------------------
 
-function scheduleReconnect() {
+function scheduleReconnect(rateLimited = false) {
   if (reconnectTimer) return;
 
   reconnectAttempts += 1;
 
-  const delay = Math.min(
-    RECONNECT_MAX_MS,
-    RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1)
-  );
+  // A rate-limited handshake gets the fixed long wait; everything else keeps the
+  // 1s, 2s, 4s … ladder capped at RECONNECT_MAX_MS.
+  const delay = rateLimited
+    ? RECONNECT_RATE_LIMIT_MS
+    : Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1));
 
-  console.log(`[ws] reconnecting in ${delay} ms (attempt ${reconnectAttempts})`);
+  console.log(
+    `[ws] reconnecting in ${delay} ms (attempt ${reconnectAttempts})` +
+    (rateLimited ? " — handshake refused (429)" : "")
+  );
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
