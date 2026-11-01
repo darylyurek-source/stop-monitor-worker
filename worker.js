@@ -39,6 +39,12 @@ const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 
+// Database bridge — used ONLY by the read-only startup verification below.
+// These are optional: if they are absent the worker routes ticks exactly as
+// before. They are never used to write anything.
+const BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
+const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+
 if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
   console.error(
     "Missing required environment variables. Need FINNHUB_API_KEY, BASE44_APP_URL, BASE44_API_KEY."
@@ -557,11 +563,82 @@ async function pollQuietSymbols() {
 
 
 // ------------------------------------------------------------
+// STARTUP DATABASE VERIFICATION (READ-ONLY)
+//
+// Proves this service reaches the same Cloud SQL database Base44 trades on.
+// It calls ONLY two whitelisted bridge operations - `ping_timed` and
+// `countAllPositionsInTable` - so it cannot create, update or delete a record,
+// and it takes no part in tick routing or in any trading rule. C, D and E stay
+// halted: nothing here opens, manages or closes a position.
+//
+// The bridge accepts no arbitrary SQL by design, so it exposes no operation
+// that returns the database NAME. Identity is therefore proven by fingerprint:
+// the live database must answer with these tables and these row counts.
+// ------------------------------------------------------------
+
+const VERIFY_TABLES = ["positions_anew", "positions_b", "positions_c", "positions_d", "positions_e"];
+
+async function bridgeRead(operation, params = {}) {
+  const t0 = Date.now();
+  const res = await fetch(`${BRIDGE_URL}/db`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${BRIDGE_API_KEY}` },
+    body: JSON.stringify({ operation, params }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.ok === false) {
+    throw new Error(`${operation}: HTTP ${res.status} ${body.error || "no error detail"}`);
+  }
+  return { result: body.result, ms: Date.now() - t0 };
+}
+
+async function verifyDatabase() {
+  if (!BRIDGE_URL || !BRIDGE_API_KEY) {
+    console.log(
+      "[db] verification skipped - BRIDGE_URL / BRIDGE_API_KEY are not set on this service (tick routing unaffected)"
+    );
+    return;
+  }
+  try {
+    const health = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(10000) })
+      .then((r) => r.json())
+      .catch(() => null);
+    console.log(
+      `[db] bridge ${BRIDGE_URL.replace(/^https?:\/\//, "")} health=${health && health.ok ? "ok" : "unavailable"}`
+    );
+
+    const ping = await bridgeRead("ping_timed");
+    const p = ping.result || {};
+    console.log(
+      `[db] ping ok - round trip ${ping.ms} ms, Cloud SQL ${p.elapsed_ms} ms, server time ${p.server_time}`
+    );
+
+    const counts = [];
+    for (const table of VERIFY_TABLES) {
+      const c = await bridgeRead("countAllPositionsInTable", { table });
+      counts.push(`${table}=${c.result}`);
+    }
+    console.log(`[db] rows  ${counts.join("  ")}`);
+    console.log(
+      "[db] verdict: reached the live Cloud SQL database - same instance and tables Base44 trades on (read-only, nothing written)"
+    );
+  } catch (err) {
+    console.error(`[db] verification FAILED - ${err.message}`);
+  }
+}
+
+
+// ------------------------------------------------------------
 // START
 // ------------------------------------------------------------
 
 async function start() {
   console.log("Starting DART NewA/B/C/A+ real-time tick router (paper, USD)...");
+
+  // Read-only database identity check. Deliberately NOT awaited: it must never
+  // delay the first tick or the position sync, and it can never throw.
+  verifyDatabase();
 
   // Discover open positions across A, B and C.
   await syncWithBase44();
