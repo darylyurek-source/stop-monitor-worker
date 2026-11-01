@@ -46,6 +46,9 @@ let attempts = 0;
 let reportTimer = null;
 let openedAt = Date.now();
 let stableTimer = null;
+// Every socket this module has created and not yet seen close. The one-stream guard
+// reads this, not the `socket` pointer.
+const live = new Set();
 
 const subs = new Set();
 const finnhubPrice = new Map(); // symbol -> { price, at } — shadow comparison only
@@ -170,13 +173,24 @@ function send(message) {
 
 function connect() {
   if (!enabled()) return;
-  if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
+
+  // EXACTLY ONE STREAM, EVER. This account permits a single live stream: a second
+  // one is closed by the provider with code 1008, which then closes the other, and
+  // the pair fight forever. A socket is therefore only created when NO socket is
+  // registered here at all — opening, open or closing, any of them blocks this —
+  // and the close handler is the only thing that reconnects. `live` is the honest
+  // count, so a duplicate can never hide behind the `socket` pointer again.
+  if (live.size > 0) {
+    if (live.size > 1) console.error(`[massive] ${live.size} sockets registered — keeping one`);
+    return;
+  }
   if (socket) {
     try { socket.removeAllListeners(); socket.terminate(); } catch (_) {}
     socket = null;
   }
 
   const next = new WebSocket(WS_URL);
+  live.add(next);
   socket = next;
   authed = false;
   openedAt = Date.now();
@@ -201,6 +215,7 @@ function connect() {
 
     // Retire this socket completely before the retry opens its successor, so the next
     // connection cannot be judged a second stream alongside this one.
+    live.delete(next);
     try { next.removeAllListeners(); next.terminate(); } catch (_) {}
     socket = null;
 
@@ -278,7 +293,7 @@ function onStatus(frame) {
 
   if (status === "auth_success") {
     authed = true;
-    console.log(`[massive] authenticated — ${subs.size} subscription(s), mode=${mode}`);
+    console.log(`[massive] authenticated — ${subs.size} subscription(s), mode=${mode}, streams=${live.size}`);
     // Re-issue every subscription: anything sent before auth completed was ignored.
     for (const symbol of subs) send({ action: "subscribe", params: `T.${symbol}` });
 
@@ -340,4 +355,19 @@ function compareWithFinnhub(symbol, price) {
       `(massive ${price} vs finnhub ${reference.price})`
     );
   }
+}
+
+// Close the stream the moment this process is asked to stop. A redeploy that leaves
+// its old socket holding the account's one stream is exactly what makes the next
+// instance's connection a "second stream" and gets it closed with 1008.
+export function shutdown() {
+  clearTimeout(reconnectTimer);
+  clearTimeout(stableTimer);
+  reconnectTimer = null;
+  for (const s of live) {
+    try { s.removeAllListeners(); s.terminate(); } catch (_) {}
+  }
+  live.clear();
+  socket = null;
+  authed = false;
 }
