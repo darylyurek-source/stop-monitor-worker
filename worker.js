@@ -37,6 +37,7 @@ import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
 import * as positionBook from "./positionBook.js";
 import { configure as configureBridge } from "./bridge.js";
+import * as massiveFeed from "./massiveFeed.js";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
@@ -49,6 +50,25 @@ const BASE44_API_KEY = process.env.BASE44_API_KEY;
 // request fails the worker still routes every tick exactly as before.
 let BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
 let BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+
+// WHICH PRICE FEED ROUTES TICKS.
+//   finnhub        — unchanged behaviour: the Finnhub socket routes every tick.
+//   massive-shadow — Finnhub still routes; Massive connects and only COMPARES prices.
+//   massive        — Massive routes every tick and the Finnhub socket is not opened.
+//
+// The feed supplies (symbol, price) and nothing else, so every trading rule,
+// threshold, press, stop, size and exit is identical in all three modes.
+const PRICE_FEED = (() => {
+  const requested = String(process.env.PRICE_FEED || "finnhub").toLowerCase();
+  if (requested === "finnhub") return "finnhub";
+  if (!process.env.MASSIVE_API_KEY) {
+    console.error(`[feed] PRICE_FEED=${requested} but MASSIVE_API_KEY is absent — staying on finnhub`);
+    return "finnhub";
+  }
+  if (requested === "massive") return "massive";
+  if (requested === "massive-shadow") return "massive-shadow";
+  return "finnhub";
+})();
 
 // Resolve the bridge connection at startup: from this service's own environment when
 // present, otherwise from Base44. One request, before any tick or sync, so both the
@@ -279,6 +299,19 @@ async function syncWithBase44() {
 
     symbolPositions.clear();
     for (const [k, v] of next) symbolPositions.set(k, v);
+
+    // Point Massive at the same symbols (in shadow mode it only compares them), and
+    // open or close the Finnhub socket to match what is actually open: Finnhub drops
+    // a socket that has no subscription within a second or two, so holding one on an
+    // empty book produces nothing but a reconnect storm and handshake refusals.
+    massiveFeed.setSymbols([...seenSymbols]);
+    if (PRICE_FEED !== "massive") {
+      if (symbolPositions.size > 0) connectWebSocket();
+      else if (ws) {
+        try { ws.removeAllListeners(); ws.terminate(); } catch (_) {}
+        ws = null;
+      }
+    }
 
     // Drop mailboxes whose position is no longer open. A mailbox with a request
     // still in flight is left alone - its own pump finishes and a later sync
@@ -532,6 +565,10 @@ async function pumpMailbox(m, first) {
 function routeTick(symbol, price) {
   lastTick.set(symbol, Date.now());
 
+  // Shadow mode: remember what Finnhub is quoting so Massive's prices can be
+  // compared with it on the same symbol. Never affects the tick itself.
+  if (PRICE_FEED === "massive-shadow") massiveFeed.noteFinnhubPrice(symbol, price);
+
   const refs = symbolPositions.get(symbol);
   if (!refs || refs.length === 0) return;
 
@@ -553,6 +590,12 @@ function wsSend(message) {
 }
 
 function connectWebSocket() {
+  // Massive owns the feed: keep Finnhub closed rather than duplicating ticks.
+  if (PRICE_FEED === "massive") return;
+  // Nothing open, nothing to subscribe to: Finnhub closes an unsubscribed socket in
+  // about two seconds, and the retries that follow are what produced the 429 storm.
+  // The next sync opens the socket as soon as a position exists.
+  if (symbolPositions.size === 0) return;
   // ONE socket per process. Two sockets from the same worker fight over the same
   // stream: Finnhub gives it to whichever connected last and refuses the other with
   // 429, so each side's retry closes the other — a handshake ping-pong. A socket
@@ -701,14 +744,22 @@ async function pollQuietSymbols() {
     if (now - last < QUIET_TICK_MS) continue;
 
     try {
-      const res = await fetch(
-        `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`
-      );
+      // In Massive mode the fallback is Massive's own snapshot, which has no
+      // per-minute ceiling; every other mode keeps Finnhub's quote exactly as before.
+      let price = null;
 
-      if (!res.ok) continue;
+      if (PRICE_FEED === "massive") {
+        price = await massiveFeed.snapshotPrice(symbol);
+      } else {
+        const res = await fetch(
+          `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`
+        );
 
-      const q = await res.json();
-      const price = numberOrNull(q && q.c);
+        if (!res.ok) continue;
+
+        const q = await res.json();
+        price = numberOrNull(q && q.c);
+      }
 
       if (price && price > 0) {
         routeTick(symbol, price);
@@ -802,10 +853,23 @@ async function start() {
   // delay the first tick or the position sync, and it can never throw.
   verifyDatabase();
 
+  // Price feed. Massive is prepared in every mode; in shadow it only compares.
+  massiveFeed.configure(process.env.MASSIVE_API_KEY);
+  massiveFeed.enable(
+    PRICE_FEED === "massive" ? "live" : PRICE_FEED === "massive-shadow" ? "shadow" : "off",
+    routeTick
+  );
+  const massiveStarted = massiveFeed.start();
+  console.log(
+    `[feed] price feed = ${PRICE_FEED}` +
+    (massiveStarted ? " (massive stream up)" : " (massive idle)") +
+    " — trading rules unchanged"
+  );
+
   // Discover open positions across A, B and C.
   await syncWithBase44();
 
-  // Start live Finnhub feed.
+  // Start live Finnhub feed (skipped when Massive owns the ticks).
   connectWebSocket();
 
   // Discover newly opened / replacement positions, at a cadence that follows the
