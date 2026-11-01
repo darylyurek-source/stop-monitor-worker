@@ -1,15 +1,17 @@
-// worker.js - Render tick-router for DART New A / B / C / A+ live forward-test (PAPER).
+// worker.js - Render tick-router for DART A / B / C live forward-test (PAPER).
 //
 // Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
-// quiet symbols). Base44 owns ALL trading math - dartLiveNewA, dartLiveB,
-// dartLiveC and dartLiveAPlus each compute stops, presses, exits and the
-// Vector 65 from the live tick P&L. This worker discovers open positions across
-// all four systems from getMonitoringStateAll, subscribes to each unique symbol
-// once, and routes every tick to the handler specified for each position.
+// quiet symbols). Base44 owns ALL trading math - dartLiveNewA, dartLiveB and
+// dartLiveC each compute stops, presses, exits and the Vector 65 from the live
+// tick P&L. This worker discovers open positions across the three permanent
+// accounts from getMonitoringStateAll, subscribes to each unique symbol once,
+// and routes every tick to the handler specified for each position.
 //
-// The same symbol can be open in New A, B, C and A+ at the same time; each tick
-// for that symbol is forwarded independently to each system's handler. No
-// duplicate quote requests — each unique symbol is subscribed once.
+// The same symbol can be open in A, B and C at the same time; each tick for that
+// symbol is forwarded independently to each system's handler, through that
+// position's own mailbox. No duplicate quote requests — each unique symbol is
+// subscribed once. D and E are halted: they are never served, so no tick of
+// theirs can ever be forwarded.
 //
 // Handler contract (identical for dartLiveA / dartLiveB / dartLiveC):
 //   POST {BASE44_APP_URL}/functions/{handler}
@@ -308,7 +310,7 @@ async function syncWithBase44() {
     // Build the new symbol -> positions map from the response.
     const next = new Map();
     const seenSymbols = new Set();
-    let countA = 0, countB = 0, countC = 0, countAPlus = 0;
+    let countA = 0, countB = 0, countC = 0;
 
     for (const it of items) {
       const symbol = String(it.symbol || "").toUpperCase();
@@ -323,7 +325,6 @@ async function syncWithBase44() {
       if (system === "ANEW") countA++;
       else if (system === "B") countB++;
       else if (system === "C") countC++;
-      else if (system === "APLUS") countAPlus++;
 
       if (!next.has(symbol)) next.set(symbol, []);
       next.get(symbol).push({ positionId, handler, system });
@@ -373,7 +374,7 @@ async function syncWithBase44() {
 
     console.log(
       `[sync] ${symbolPositions.size} symbol(s), ${items.length} position(s) ` +
-      `[NewA=${countA} B=${countB} C=${countC} A+=${countAPlus}] market=${marketClosed ? "closed" : "open"}` +
+      `[A=${countA} B=${countB} C=${countC}] market=${marketClosed ? "closed" : "open"}` +
       (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
 

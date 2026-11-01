@@ -1,0 +1,177 @@
+// tickDecisionSelfTest.js — pins the portable decision engine to the live rules.
+//
+//     node render-worker/tickDecisionSelfTest.js
+//
+// Every expected value below was derived by hand from the Base44 source
+// (shared/cloneTick.ts and the modules it imports), not from running this engine —
+// so a passing run proves the port agrees with the live rules rather than with
+// itself. Exit code 0 = the engine may be used for shadow comparison. Exit code 1 =
+// do NOT advance: the failing case names the rule that diverged.
+//
+// No network, no database, no clock, no trading record. Pure arithmetic.
+
+import { decideTick } from "./tickDecisionCore.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy } from "./tickRules.js";
+import { computeVector } from "./vectorCore.js";
+
+const NOW = "2026-10-09T15:00:00.000Z";
+
+const pos = (over) => ({
+  id: "p1",
+  status: "open",
+  symbol: "TEST",
+  side: "long",
+  entry_time: "2026-10-09T13:30:00.000Z",
+  entry_price: 100,
+  shares: 200,
+  tcb: 20000,
+  peak_pl: 0,
+  pressed_1r: false,
+  pressed_2r: false,
+  pressed_3r: false,
+  protective_stop_active: false,
+  price_trail_active: false,
+  checked_loss_levels: [],
+  profit_grid_active: false,
+  commission_fees: 0,
+  presses: [],
+  ...(over || {}),
+});
+
+const tick = (system, position, price, extra) =>
+  decideTick({ system, position, price, nowIso: NOW, ...(extra || {}) });
+
+const cases = [];
+function check(name, actual, expected) {
+  const pass = JSON.stringify(actual) === JSON.stringify(expected);
+  cases.push({ name, pass, actual, expected });
+}
+
+// --- RULE TABLE MIRROR ---------------------------------------------------------
+check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C")], [250, 250, 250]);
+check("hard stop per system", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -1700]);
+check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 65, 85, 350]);
+check("partial profit only C/D/E", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C").threshold, partialProfitPolicy("D").threshold, partialProfitPolicy("E").threshold], [null, null, 2000, 1500, 1500]);
+
+// --- 1. HARD STOP (A) ---------------------------------------------------------
+// long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
+// 1.28 + slippage 1.83 = 3.11.
+const t1 = tick("A", pos(), 91.5);
+check("hard stop fires at -$1,700", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 91.5, -1700]);
+check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.11, -1703.11]);
+
+// --- 2. PRESS 1 (B at +$250) --------------------------------------------------
+const t2 = tick("B", pos(), 101.25);
+check("press 1 at +$250", [t2.action, t2.event, t2.pl_raw], ["press", "press1", 250]);
+check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after, t2.commission_fees], [395, 59993.75, 595, 5.46]);
+
+// --- 3. PARTIAL PROFIT (D at +$1,500) ----------------------------------------
+// long 200 sh at 107.50 -> P&L $1,500: sells 100 sh, banks $750 gross.
+// D is halted in production, so the rule is driven with halted:false — the
+// arithmetic must be right the moment the registry is changed back.
+const t3 = tick("D", pos(), 107.5, { halted: false });
+check("D sells half at +$1,500", [t3.action, t3.event, t3.pl_raw], ["partial", "partial_profit_exit", 1500]);
+check("partial arithmetic", [t3.sold_shares, t3.remaining_shares, t3.gross_pl, t3.net_pl], [100, 100, 750, 748.23]);
+check("partial patch", [t3.patch.shares, t3.patch.tcb, t3.patch.partial_profit_taken], [100, 10000, true]);
+
+// --- 4. NO PARTIAL FOR A (ANEW) — the +$900 grid takes it instead ------------
+const t4 = tick("ANEW", pos(), 110, { vectorScore: 30 });
+check("A never sells partially", [t4.action, t4.event, t4.grid_level], ["grid", "vector_profit_activate", 900]);
+
+// --- 5. UPSIDE VECTOR EXIT (B, score 70 at activation) ------------------------
+const t5 = tick("B", pos(), 110, { vectorScore: 70 });
+check("upside Vector exit", [t5.action, t5.event, t5.vector_level, t5.gross_pl, t5.net_pl], ["exit", "vector_profit_exit", 900, 2000, 1996.42]);
+
+// --- 6. DOWNSIDE VECTOR EXIT (score 80) --------------------------------------
+const t6 = tick("B", pos(), 94, { vectorScore: 80 });
+check("downside Vector exit", [t6.action, t6.event, t6.vector_level, t6.patch.checked_loss_levels], ["exit", "vector_exit", -100, [-100]]);
+
+// --- 7. DOWNSIDE VECTOR HOLD (score 40) --------------------------------------
+const t7 = tick("B", pos(), 94, { vectorScore: 40 });
+check("downside hold records every level", [t7.action, t7.event, t7.patch.checked_loss_levels.length, t7.patch.checked_loss_levels[11]], ["hold", "vector_checkpoint_hold", 12, -1200]);
+
+// --- 8. PROTECTIVE GIVEBACK ---------------------------------------------------
+// high-water $1,300, buffer $350 -> protected $950; P&L $940 breaches it.
+const t8 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1300 }), 104.7);
+check("protective giveback exits", [t8.action, t8.event, t8.gross_pl, t8.commission_fees, t8.net_pl], ["exit", "protective_stop", 940, 3.45, 936.55]);
+
+// --- 9. PROTECTIVE HIGH-WATER RATCHET (no breach) -----------------------------
+const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
+check("high-water ratchets up", [t9.action, t9.prior_patches[0]], ["grid", { protective_high_water_pl: 1200 }]);
+
+// --- 10. PRICE TRAIL (C ladder) ---------------------------------------------
+// The tier is chosen from PEAK profit, not current P&L. Stored peak $3,000 with
+// current P&L $2,000 -> the $2,500 tier (0.50%): extreme $120.00 protects $119.40,
+// so a price of $110.00 breaches.
+const t10 = tick("C", pos({ price_trail_active: true, price_trail_extreme: 120, peak_pl: 3000, pressed_1r: true, pressed_2r: true }), 110, { halted: false });
+check("price trail exits on the peak's tier", [t10.action, t10.event, t10.stop_detail.trail_pct, t10.stop_detail.trail_protected], ["exit", "price_trail_stop", 0.005, 119.4]);
+check("price trail costs", [t10.gross_pl, t10.commission_fees], [2000, 3.58]);
+
+// Same stored peak, but a price that lifts current P&L above it: the peak becomes
+// $3,880 and the tighter 0.35% tier applies (protected $119.58), never the looser one.
+const t10b = tick("C", pos({ price_trail_active: true, price_trail_extreme: 120, peak_pl: 3000, pressed_1r: true, pressed_2r: true }), 119.4, { halted: false });
+check("current P&L above the peak tightens the tier", [t10b.action, t10b.event, t10b.stop_detail.trail_pct, t10b.stop_detail.trail_protected], ["exit", "price_trail_stop", 0.0035, 119.58]);
+
+// --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
+const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000 }), 102);
+check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 392, 792, 5.45]);
+
+// --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
+// D and E are the halted accounts (C was reactivated 2026-11-01).
+const t12 = tick("D", pos(), 91.5);
+check("halted account decides nothing", [t12.action, t12.halted, t12.patch], ["halted", true, undefined]);
+check("halted account would otherwise stop out at this price", tick("B", pos(), 91.5).action, "exit");
+
+// --- 13. MISSING VECTOR IS AN EXPLICIT GAP, NEVER A GUESS --------------------
+const t13 = tick("B", pos(), 94);
+check("missing vector asks for it", [t13.action, t13.pending_step, t13.loss_levels.length], ["needs_vector", "downside_vector", 12]);
+
+// --- 14. SHORT SIDE FEES (press is a SELL for a short) -----------------------
+const t14 = tick("ANEW", pos({ side: "short" }), 98.75);
+check("short press 1", [t14.action, t14.event, t14.pl_raw, t14.shares_added, t14.shares_after, t14.commission_fees], ["press", "press1", 250, 405, 605, 6.68]);
+
+// --- 15. HOLD LEAVES THE POSITION UNTOUCHED EXCEPT THE MARKS ----------------
+const t15 = tick("B", pos({ pressed_1r: true, pressed_2r: true, price_trail_active: true, price_trail_extreme: 101 }), 100.9);
+check("hold writes display marks only", [t15.action, t15.event, Object.keys(t15.patch).sort()], ["hold", "hold", ["current_pl", "current_price", "peak_pl"]]);
+
+// --- 16. THE SCORE IS COMPUTED FROM CANDLES WHEN NONE IS PASSED --------------
+// A clean 0.20-a-bar drift against a long: the Vector must read this as reversal.
+function driftAgainst(side, n = 20) {
+  const out = [];
+  let p = 100;
+  const sign = side === "long" ? -1 : 1;
+  for (let i = 0; i < n; i++) {
+    const o = p;
+    const c = o + sign * 0.2;
+    out.push({ open: o, high: Math.max(o, c) + 0.02, low: Math.min(o, c) - 0.02, close: c, volume: 5000 });
+    p = c;
+  }
+  return out;
+}
+const driftBars = driftAgainst("long");
+// 200 sh at 100, price 99.40 -> P&L -$120, so the -$100 checkpoint is crossed and
+// the score decides it. No vectorScore argument: the candles must supply it.
+const t16 = decideTick({ system: "B", position: pos(), price: 99.4, nowIso: NOW, candles: driftBars });
+check("candles supply the score the downside check needs", [t16.action, t16.event, t16.vector_source], ["exit", "vector_exit", "candles"]);
+check("the engine's score is the Vector module's own", t16.vector_score, computeVector(driftBars, driftBars.length - 1, "long", 100).combined_reversal_score);
+
+// The live engine's own fallback (0 when its candle fetch is empty) must be opt-in,
+// and when opted in the decision must match Base44 rather than deferring.
+const t17 = decideTick({ system: "B", position: pos(), price: 99.4, nowIso: NOW, liveZeroFallback: true });
+check("live zero fallback decides instead of deferring", [t17.action, t17.event, t17.vector_source], ["hold", "vector_checkpoint_hold", "live_zero_fallback"]);
+
+// --- REPORT ------------------------------------------------------------------
+const passed = cases.filter((c) => c.pass).length;
+const failed = cases.filter((c) => !c.pass);
+
+console.log("TICK DECISION CORE — SELF TEST");
+console.log(`cases: ${cases.length}   passed: ${passed}   failed: ${failed.length}`);
+for (const c of cases) {
+  console.log(`  ${c.pass ? "PASS" : "FAIL"}  ${c.name}`);
+  if (!c.pass) console.log(`        expected ${JSON.stringify(c.expected)}\n        actual   ${JSON.stringify(c.actual)}`);
+}
+if (failed.length) {
+  console.log("\nFAILED — the portable engine does not match the live rules. Do not run shadow comparison.");
+  process.exit(1);
+}
+console.log("\nALL RULES MATCH BASE44. The portable engine is ready for shadow comparison.");

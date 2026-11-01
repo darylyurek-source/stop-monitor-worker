@@ -22,6 +22,7 @@ import { listOpen, getPosition, updateGuarded } from "./bridge.js";
 export const TABLE_FOR_SYSTEM = {
   ANEW: "positions_anew",
   B: "positions_b",
+  C: "positions_c",
 };
 
 const books = new Map(); // system -> Map(id -> position)

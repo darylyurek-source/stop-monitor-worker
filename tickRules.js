@@ -67,12 +67,7 @@ export const CLONE_PRESS1 = {
   C: 250,
   D: 250,
   E: 250,
-  F: 200,
-  G: 250,
-  H: 300,
-  I: 350,
   ANEW: 250,
-  APLUS: 100,
 };
 
 export function press1Threshold(system) {
@@ -82,16 +77,17 @@ export function press1Threshold(system) {
   return Number.isFinite(Number(c)) ? Number(c) : 250;
 }
 
-// cloneSystems.ts — the only hard-stop override that still exists.
-export const SYSTEM_HARD_STOP = { APLUS: -750 };
+// cloneSystems.ts — no system overrides the shared -$1,700 stop (DART A+ carried
+// the last override and is retired).
+export const SYSTEM_HARD_STOP = {};
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
   return Number.isFinite(Number(v)) ? Number(v) : STOP;
 }
 
-// cloneSystems.ts — partial profit-taking. A, B, F–I and APLUS have NO row and
-// therefore never sell partially: one comparison, no-op.
+// cloneSystems.ts — partial profit-taking. A and B have NO row and therefore never
+// sell partially: one comparison, no-op. D and E keep their rows while halted.
 export const SYSTEM_PARTIAL_PROFIT = {
   C: { threshold: 2000, fraction: 0.5 },
   D: { threshold: 1500, fraction: 0.5 },
@@ -112,7 +108,7 @@ export function partialProfitPolicy(system) {
 // protectiveStop.ts — arm thresholds and the giveback.
 //   B_RULE_SET  stock 55 / market 65 — DART A (ANEW) and DART B
 //   CD_RULE_SET stock 65 / market 85 — DART C, DART D, DART E
-//   C_RULE_SET  stock 65 / market 86 — the dormant clones F–I, ABTEST, APLUS
+//   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
 // All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
 // protectivePolicy() does in Base44.
 // ---------------------------------------------------------------------------
@@ -125,14 +121,10 @@ export const PROTECTIVE_BY_SYSTEM = {
   B: B_RULE_SET,
   C: CD_RULE_SET,
   D: CD_RULE_SET,
-  A: B_RULE_SET,
-  ABTEST: C_RULE_SET,
   E: CD_RULE_SET,
-  F: C_RULE_SET,
-  G: C_RULE_SET,
-  H: C_RULE_SET,
-  I: C_RULE_SET,
-  APLUS: C_RULE_SET,
+  // Legacy A alias, no longer routed. Kept so a historical 'A' record still
+  // resolves to the same 55/65 rule set it always had — never to the fallback.
+  A: B_RULE_SET,
 };
 
 export function protectivePolicy(system) {
@@ -172,10 +164,10 @@ export const LOSS_LEVELS = [
 ];
 
 // ---------------------------------------------------------------------------
-// systemHalt.ts — C, D and E are halted. A halted account trades nothing: the
-// engine returns a no-op decision and writes nothing.
+// systemHalt.ts — D and E are halted (C reactivated 2026-11-01). A halted account
+// trades nothing: the engine returns a no-op decision and writes nothing.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = ["C", "D", "E"];
+export const HALTED_SYSTEMS = ["D", "E"];
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 
