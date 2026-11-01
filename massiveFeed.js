@@ -38,6 +38,8 @@ let authed = false;
 let reconnectTimer = null;
 let attempts = 0;
 let reportTimer = null;
+let openedAt = Date.now();
+let stableTimer = null;
 
 const subs = new Set();
 const finnhubPrice = new Map(); // symbol -> { price, at } — shadow comparison only
@@ -168,6 +170,7 @@ function connect() {
   const next = new WebSocket(WS_URL);
   socket = next;
   authed = false;
+  openedAt = Date.now();
 
   next.on("open", () => {
     if (socket !== next) return;
@@ -180,16 +183,20 @@ function connect() {
     handle(raw);
   });
 
-  next.on("close", () => {
+  next.on("close", (code, reason) => {
     if (socket !== next) return;
     stats.closes += 1;
+    stats.lastClose = { code, reason: String(reason || "").slice(0, 80) };
     authed = false;
+    clearTimeout(stableTimer);
+    console.log(`[massive] socket closed — code ${code}${reason ? `, reason "${String(reason).slice(0, 80)}"` : ""}, lived ${Math.round((Date.now() - openedAt) / 1000)}s`);
     scheduleReconnect();
   });
 
   next.on("error", (err) => {
     if (socket !== next) return;
     stats.lastError = String(err?.message || err).slice(0, 120);
+    console.error(`[massive] socket error: ${stats.lastError}`);
     try { next.terminate(); } catch (_) {}
     scheduleReconnect();
   });
@@ -236,10 +243,17 @@ function onStatus(frame) {
 
   if (status === "auth_success") {
     authed = true;
-    attempts = 0;
     console.log(`[massive] authenticated — ${subs.size} subscription(s), mode=${mode}`);
     // Re-issue every subscription: anything sent before auth completed was ignored.
     for (const symbol of subs) send({ action: "subscribe", params: `T.${symbol}` });
+
+    // Reset the retry ladder only once a connection has actually HELD for a while —
+    // the same lesson the Finnhub socket taught: resetting on connect turns a
+    // takeover into a 1-second reconnect loop.
+    clearTimeout(stableTimer);
+    stableTimer = setTimeout(() => {
+      if (socket && socket.readyState === WebSocket.OPEN && authed) attempts = 0;
+    }, 30000);
     return;
   }
 
