@@ -34,6 +34,8 @@
 
 import WebSocket from "ws";
 import fetch from "node-fetch";
+import * as engineShadow from "./engineShadow.js";
+import * as positionBook from "./positionBook.js";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
@@ -58,6 +60,11 @@ const FINNHUB_WS_URL = "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
 // in one response, each with its `system` and `handler` routing field.
 const MONITOR_ENDPOINT =
   `${BASE44_APP_URL}/functions/getMonitoringStateAll`;
+
+// The engine switchboard: which account the Render engine is attached to, and how
+// far it may go (shadow records, live writes). Read on every sync — once per 15 s
+// at most, never on the tick path.
+const SWITCH_ENDPOINT = `${BASE44_APP_URL}/functions/getEngineSwitches`;
 
 // SYNC CADENCE — how often this worker asks the app for the open book. While the
 // session is live it keeps the 15-second cadence; when the app reports the market
@@ -234,8 +241,87 @@ async function syncWithBase44() {
       `[NewA=${countA} B=${countB} C=${countC} A+=${countAPlus}] market=${marketClosed ? "closed" : "open"}` +
       (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
+
+    // Which account (if any) the Render engine is attached to. Deliberately inside
+    // the sync's try/catch: an unreadable switchboard leaves the engine idle and
+    // Base44 executing, exactly as before.
+    await applyEngineSwitches();
   } catch (err) {
     console.error("[sync] error:", err.message);
+  }
+}
+
+
+// ------------------------------------------------------------
+// ENGINE SWITCHES — who executes which account
+//
+// The dashboard writes one row per account (EngineSwitch). This reads them, and:
+//   • attaches the portfolio book and the candle series for every account whose
+//     mode is not "off", so the engine has state and history before its first tick;
+//   • re-loads the book on every sync, so a position opened, closed or pressed by
+//     Base44 is reflected here before the next price arrives.
+//
+// Nothing in this section decides anything. It answers "which accounts is the
+// engine attached to", and the tick path does the rest.
+// ------------------------------------------------------------
+
+async function fetchEngineSwitches() {
+  const res = await fetch(SWITCH_ENDPOINT, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${BASE44_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!res.ok) throw new Error(`getEngineSwitches HTTP ${res.status}`);
+  const body = await res.json();
+  return Array.isArray(body?.switches) ? body.switches : [];
+}
+
+let engineAttached = "";
+
+async function applyEngineSwitches() {
+  let switches = [];
+  try {
+    switches = await fetchEngineSwitches();
+  } catch (err) {
+    console.error(`[engine] switchboard unavailable (${err.message}) — engine idle, Base44 unaffected`);
+    return;
+  }
+
+  const attached = switches
+    .filter((s) => s && s.mode && String(s.mode) !== "off")
+    .map((s) => String(s.system).toUpperCase())
+    .filter((s) => positionBook.tableFor(s));
+
+  const key = attached.slice().sort().join(",");
+  if (key !== engineAttached) {
+    engineAttached = key;
+    engineShadow.enable(attached);
+    console.log(attached.length
+      ? `[engine] attached: ${attached.join(", ")} (shadow = decisions recorded only)`
+      : "[engine] attached: none");
+  }
+  if (!attached.length) return;
+
+  for (const system of attached) {
+    try {
+      const n = await positionBook.load(system);
+      if (key !== engineAttached) break; // superseded by a newer switch read
+      console.log(`[engine] ${system} book: ${n} open position(s)`);
+    } catch (err) {
+      console.error(`[engine] ${system} book load failed: ${err.message}`);
+    }
+  }
+
+  // Seed only the symbols actually open, and only once per session — this is the
+  // only candle fetch the worker ever makes, and it never runs on the tick path.
+  try {
+    await engineShadow.primeSymbols([...symbolPositions.keys()]);
+  } catch (err) {
+    console.error(`[engine] candle seed: ${err.message}`);
   }
 }
 
@@ -274,6 +360,13 @@ async function forwardTick(ref, symbol, price) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TICK_TIMEOUT_MS);
 
+  // SHADOW DECISION. When this account is attached to the Render engine, the same
+  // price and the same book are put through the portable engine BEFORE the price is
+  // forwarded, so its verdict can be compared with Base44's answer to the identical
+  // tick. Writes nothing. Returns null — at no cost — when the account is not
+  // attached, which is every account until the switch says otherwise.
+  const verdict = engineShadow.decide(ref, symbol, price);
+
   try {
     const res = await fetch(`${BASE44_APP_URL}/functions/${ref.handler}`, {
       method: "POST",
@@ -291,6 +384,17 @@ async function forwardTick(ref, symbol, price) {
 
     let body = null;
     try { body = await res.json(); } catch (_) {}
+
+    // Record the pair: the engine's verdict and Base44's, on the same price.
+    engineShadow.record(ref, symbol, price, verdict, body);
+
+    // Base44 is the writer in shadow mode, so its action is the freshest truth
+    // about this position. Re-read it once after Base44 changes something, so the
+    // engine's book can never sit up to 15 s stale and turn a real agreement into a
+    // false disagreement. One read per ACTION, never per tick.
+    if (engineShadow.enabled() && body && (body.applied || body.closed)) {
+      positionBook.reloadOne(ref.system, ref.positionId).catch(() => {});
+    }
 
     if (res.status === 404) {
       console.log(`[${ref.system}] ${symbol} -> ${ref.handler}: position not found`);
@@ -659,6 +763,10 @@ async function start() {
 
   // Catch events on quiet symbols.
   setInterval(pollQuietSymbols, POLL_LOOP_MS);
+
+  // Drain the shadow-run rows. Writes only to the ShadowTick entity; no-ops while
+  // nothing is attached.
+  engineShadow.startFlusher();
 }
 
 start().catch((err) => {
