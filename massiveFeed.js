@@ -221,13 +221,22 @@ function connect() {
     if (socket !== next) return;
     stats.lastError = String(err?.message || err).slice(0, 120);
     console.error(`[massive] socket error: ${stats.lastError}`);
+    // Retire the socket and NOTHING else. An error is always followed by a close,
+    // and the close is the only place that knows the close code — so it alone
+    // decides how long to wait. Scheduling here would arm a 1-second retry that
+    // defeats the refusal wait.
     try { next.terminate(); } catch (_) {}
-    scheduleReconnect();
   });
 }
 
 function scheduleReconnect(blocked = false) {
-  if (reconnectTimer || !enabled()) return;
+  if (!enabled()) return;
+  // A refusal always wins over a shorter wait that is already pending.
+  if (reconnectTimer && blocked) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (reconnectTimer) return;
   attempts += 1;
   stats.reconnects += 1;
   const delay = blocked
