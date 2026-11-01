@@ -35,6 +35,7 @@
 import WebSocket from "ws";
 import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
+import * as engineLive from "./engineLive.js";
 import * as positionBook from "./positionBook.js";
 import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
@@ -430,12 +431,23 @@ async function applyEngineSwitches() {
     .map((s) => String(s.system).toUpperCase())
     .filter((s) => positionBook.tableFor(s));
 
+  // Hand the same rows to the live writer. It writes ONLY for an account whose
+  // engine is 'render' AND whose mode is 'live'; every other row leaves it refusing
+  // every verdict, so deploying it changes nothing until the switchboard says so.
+  engineLive.setModes(switches);
+
   const key = attached.slice().sort().join(",");
   if (key !== engineAttached) {
     engineAttached = key;
     engineShadow.enable(attached);
+    const live = engineLive.liveSystems();
     console.log(attached.length
-      ? `[engine] attached: ${attached.join(", ")} (shadow = decisions recorded only)`
+      ? `[engine] attached: ${attached
+          .map((s) => {
+            const row = switches.find((x) => String(x.system).toUpperCase() === s) || {};
+            return `${s}(${String(row.engine || "base44")}/${String(row.mode || "off")})`;
+          })
+          .join(", ")} — live writers: ${live.length ? live.join(", ") : "none"}`
       : "[engine] attached: none");
   }
   if (!attached.length) return;
@@ -488,19 +500,36 @@ function fmt(n) {
 // This function never throws - every failure is logged and returns - so a price
 // waiting in the mailbox can never be stranded behind a failed request.
 async function forwardTick(ref, symbol, price) {
+  // THE ENGINE DECIDES FIRST, for every attached account, from the same price and the
+  // same book. Returns null — at no cost — when the account is not attached.
+  const verdict = engineShadow.decide(ref, symbol, price);
+
+  // LIVE: Render is the executor for this account. The verdict is written through the
+  // guarded position update and the tick is NEVER forwarded — that is the whole
+  // migration, and the single-writer guarantee from the tick path's side. Base44's
+  // handler for this account already returns a no-op once its engine row says render.
+  if (engineLive.ownsWrites(ref.system)) {
+    const result = await engineLive.apply(ref, verdict);
+    if (result?.applied) {
+      console.log(
+        `[live] ${ref.system} ${symbol}: ${verdict.action}${verdict.event ? " " + verdict.event : ""}` +
+        (verdict.pl_raw != null ? ` pl=${fmt(verdict.pl_raw)}` : "") +
+        (verdict.exit_price != null ? ` @${fmt(verdict.exit_price)}` : "")
+      );
+    } else if (result && result.reason !== "hold" && result.reason !== "not_owner") {
+      console.error(`[live] ${ref.system} ${symbol}: ${verdict.action} not written (${result.reason})`);
+    }
+    return;
+  }
+
   // Abort the request if the handler never responds, so one stalled request
   // cannot stop this position's mailbox from draining. The finally block below
   // always runs.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TICK_TIMEOUT_MS);
 
-  // SHADOW DECISION. When this account is attached to the Render engine, the same
-  // price and the same book are put through the portable engine BEFORE the price is
-  // forwarded, so its verdict can be compared with Base44's answer to the identical
-  // tick. Writes nothing. Returns null — at no cost — when the account is not
-  // attached, which is every account until the switch says otherwise.
-  const verdict = engineShadow.decide(ref, symbol, price);
-
+  // SHADOW: Base44 is still the writer, so the price is forwarded and its answer is
+  // recorded beside the engine's verdict for the identical tick.
   try {
     const res = await fetch(`${BASE44_APP_URL}/functions/${ref.handler}`, {
       method: "POST",
