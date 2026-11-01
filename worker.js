@@ -649,7 +649,7 @@ function routeTick(symbol, price) {
   const refs = symbolPositions.get(symbol);
   if (!refs || refs.length === 0) return;
 
-  // A, B, C and A+ are independent: every position gets the tick through its own
+  // A, B and C are independent: every position gets the tick through its own
   // mailbox, each with its own in-flight request, so a slow handler in one system
   // never delays another system's price.
   for (const ref of refs) deliverTick(ref, symbol, price);
@@ -920,7 +920,7 @@ async function verifyDatabase() {
 // ------------------------------------------------------------
 
 async function start() {
-  console.log("Starting DART NewA/B/C/A+ real-time tick router (paper, USD)...");
+  console.log("Starting DART A/B/C real-time tick router (paper, USD) — D and E excluded...");
 
   // Graceful stop. The price providers allow ONE stream per account, so this process
   // must release its sockets before it exits — otherwise a redeploy's old instance
