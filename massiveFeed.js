@@ -26,6 +26,12 @@ const WS_URL = "wss://socket.massive.com/stocks";
 const SNAPSHOT_URL = "https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers";
 const RECONNECT_BASE_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
+// Massive allows ONE live stream per account. A close with 1008 (policy violation)
+// means our new socket collided with the session we just left, so retrying a second
+// later is what turns one refusal into an endless handshake ping-pong. A blocked
+// close therefore waits this long, letting the provider release the old session.
+const RECONNECT_BLOCKED_MS = 60000;
+const CONNECTION_STABLE_MS = 60000;
 const KEEPALIVE_SYMBOL = "SPY";   // also the app's market reference
 const SHADOW_WINDOW_MS = 5000;    // how recent a Finnhub print may be to compare against
 const REPORT_EVERY_MS = 300000;
@@ -152,6 +158,9 @@ export function shadowSummary() {
 
 function send(message) {
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  // Nothing except auth may be sent before the stream has authenticated: an
+  // unauthenticated subscribe is itself a policy violation (close code 1008).
+  if (message?.action !== "auth" && !authed) return;
   try {
     socket.send(JSON.stringify(message));
   } catch (err) {
@@ -189,8 +198,23 @@ function connect() {
     stats.lastClose = { code, reason: String(reason || "").slice(0, 80) };
     authed = false;
     clearTimeout(stableTimer);
-    console.log(`[massive] socket closed — code ${code}${reason ? `, reason "${String(reason).slice(0, 80)}"` : ""}, lived ${Math.round((Date.now() - openedAt) / 1000)}s`);
-    scheduleReconnect();
+
+    // Retire this socket completely before the retry opens its successor, so the next
+    // connection cannot be judged a second stream alongside this one.
+    try { next.removeAllListeners(); next.terminate(); } catch (_) {}
+    socket = null;
+
+    // 1008 = policy violation (Massive's "one live stream per account" refusal).
+    // Anything else keeps the ordinary ladder.
+    const blocked = code === 1008 || code === 1013;
+    if (blocked) stats.refusals += 1;
+
+    console.log(
+      `[massive] socket closed — code ${code}${reason ? `, reason "${String(reason).slice(0, 80)}"` : ""}` +
+      `, lived ${Math.round((Date.now() - openedAt) / 1000)}s` +
+      (blocked ? " (provider refused a second stream — waiting 60s)" : "")
+    );
+    scheduleReconnect(blocked);
   });
 
   next.on("error", (err) => {
@@ -202,11 +226,13 @@ function connect() {
   });
 }
 
-function scheduleReconnect() {
+function scheduleReconnect(blocked = false) {
   if (reconnectTimer || !enabled()) return;
   attempts += 1;
   stats.reconnects += 1;
-  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(2, attempts - 1));
+  const delay = blocked
+    ? RECONNECT_BLOCKED_MS
+    : Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(2, attempts - 1));
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connect();
@@ -252,8 +278,11 @@ function onStatus(frame) {
     // takeover into a 1-second reconnect loop.
     clearTimeout(stableTimer);
     stableTimer = setTimeout(() => {
-      if (socket && socket.readyState === WebSocket.OPEN && authed) attempts = 0;
-    }, 30000);
+      if (socket && socket.readyState === WebSocket.OPEN && authed) {
+        attempts = 0;
+        console.log(`[massive] stream stable for ${CONNECTION_STABLE_MS / 1000}s — reconnect ladder reset`);
+      }
+    }, CONNECTION_STABLE_MS);
     return;
   }
 
