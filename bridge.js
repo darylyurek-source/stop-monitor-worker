@@ -20,9 +20,20 @@
 
 import fetch from "node-fetch";
 
-const BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
-const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+// Mutable: the worker resolves these at startup, either from the service's own
+// environment or — when they are not set there — from Base44's
+// getWorkerBridgeConfig endpoint. Nothing else ever changes them.
+let BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
+let BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
 const TIMEOUT_MS = 8000;
+
+// Apply credentials resolved after this module was imported (the worker's startup
+// fetch from Base44). Module constants are read once at import time, so a runtime
+// resolution has to be handed in here rather than through process.env.
+export function configure(url, apiKey) {
+  BRIDGE_URL = String(url || "").replace(/\/$/, "");
+  BRIDGE_API_KEY = String(apiKey || "");
+}
 
 // Rolling round-trip record, so the worker can report its own latency instead of
 // us inferring it. Bounded — the array never grows past SAMPLE_CAP.
