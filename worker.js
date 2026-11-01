@@ -36,16 +36,70 @@ import WebSocket from "ws";
 import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
 import * as positionBook from "./positionBook.js";
+import { configure as configureBridge } from "./bridge.js";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 
-// Database bridge — used ONLY by the read-only startup verification below.
-// These are optional: if they are absent the worker routes ticks exactly as
-// before. They are never used to write anything.
-const BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
-const BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+// Database bridge — needed by the read-only startup verification and by the engine's
+// book and candle reads. NOT required in this service's environment: when they are
+// missing, the worker asks Base44 for them at startup (getWorkerBridgeConfig, using
+// the BASE44_API_KEY it already has), so nothing has to be pasted here. If that
+// request fails the worker still routes every tick exactly as before.
+let BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
+let BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
+
+// Resolve the bridge connection at startup: from this service's own environment when
+// present, otherwise from Base44. One request, before any tick or sync, so both the
+// engine and the database verification see a configured bridge. Never throws.
+async function resolveBridgeConfig() {
+  if (BRIDGE_URL && BRIDGE_API_KEY) {
+    console.log("[bridge-config] using this service's own BRIDGE_URL / BRIDGE_API_KEY");
+    configureBridge(BRIDGE_URL, BRIDGE_API_KEY);
+    return true;
+  }
+
+  try {
+    const res = await fetch(`${BASE44_APP_URL}/functions/getWorkerBridgeConfig`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${BASE44_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      console.error(
+        `[bridge-config] Base44 refused (HTTP ${res.status}) — engine idle and database verification skipped; tick routing unaffected`
+      );
+      return false;
+    }
+
+    const body = await res.json().catch(() => null);
+    const url = String(body?.bridge_url || "").replace(/\/$/, "");
+    const key = String(body?.bridge_api_key || "");
+    if (!url || !key) {
+      console.error(
+        "[bridge-config] Base44 returned no bridge credentials — engine idle and database verification skipped; tick routing unaffected"
+      );
+      return false;
+    }
+
+    BRIDGE_URL = url;
+    BRIDGE_API_KEY = key;
+    configureBridge(url, key);
+    console.log("[bridge-config] bridge credentials obtained from Base44 for this process");
+    return true;
+  } catch (err) {
+    console.error(
+      `[bridge-config] request failed (${err?.message || err}) — engine idle and database verification skipped; tick routing unaffected`
+    );
+    return false;
+  }
+}
 
 if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
   console.error(
@@ -739,6 +793,10 @@ async function verifyDatabase() {
 
 async function start() {
   console.log("Starting DART NewA/B/C/A+ real-time tick router (paper, USD)...");
+
+  // Resolve the bridge credentials FIRST, so the verification below and the engine's
+  // book reads both see a configured bridge. One request, before any tick.
+  await resolveBridgeConfig();
 
   // Read-only database identity check. Deliberately NOT awaited: it must never
   // delay the first tick or the position sync, and it can never throw.
