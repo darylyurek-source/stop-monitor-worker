@@ -51,24 +51,32 @@ const BASE44_API_KEY = process.env.BASE44_API_KEY;
 let BRIDGE_URL = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
 let BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
 
+// The market-data key the Massive stream authenticates with. Also resolved at
+// startup from Base44 when it is not set on this service, so no secret has to be
+// pasted into Render.
+let MASSIVE_API_KEY = String(process.env.MASSIVE_API_KEY || "").trim();
+
 // WHICH PRICE FEED ROUTES TICKS.
 //   finnhub        — unchanged behaviour: the Finnhub socket routes every tick.
 //   massive-shadow — Finnhub still routes; Massive connects and only COMPARES prices.
 //   massive        — Massive routes every tick and the Finnhub socket is not opened.
 //
 // The feed supplies (symbol, price) and nothing else, so every trading rule,
-// threshold, press, stop, size and exit is identical in all three modes.
-const PRICE_FEED = (() => {
+// threshold, press, stop, size and exit is identical in all three modes. It is
+// decided at startup, because the Massive key is resolved there.
+let PRICE_FEED = "finnhub";
+
+function resolveFeedMode() {
   const requested = String(process.env.PRICE_FEED || "finnhub").toLowerCase();
   if (requested === "finnhub") return "finnhub";
-  if (!process.env.MASSIVE_API_KEY) {
-    console.error(`[feed] PRICE_FEED=${requested} but MASSIVE_API_KEY is absent — staying on finnhub`);
+  if (!MASSIVE_API_KEY) {
+    console.error(`[feed] PRICE_FEED=${requested} but no MASSIVE_API_KEY is available — staying on finnhub`);
     return "finnhub";
   }
   if (requested === "massive") return "massive";
   if (requested === "massive-shadow") return "massive-shadow";
   return "finnhub";
-})();
+}
 
 // Resolve the bridge connection at startup: from this service's own environment when
 // present, otherwise from Base44. One request, before any tick or sync, so both the
@@ -117,6 +125,45 @@ async function resolveBridgeConfig() {
     console.error(
       `[bridge-config] request failed (${err?.message || err}) — engine idle and database verification skipped; tick routing unaffected`
     );
+    return false;
+  }
+}
+
+// The Massive key, resolved the same way as the bridge: this service's own
+// environment first, Base44 second. Never throws — a missing key simply leaves the
+// Finnhub feed in charge.
+async function resolveMassiveKey() {
+  if (MASSIVE_API_KEY) {
+    console.log("[worker-config] market-data key from this service's environment");
+    return true;
+  }
+
+  try {
+    const res = await fetch(`${BASE44_APP_URL}/functions/getWorkerBridgeConfig`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${BASE44_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      console.error(`[worker-config] market-data key unavailable (HTTP ${res.status}) — Finnhub stays the feed`);
+      return false;
+    }
+
+    const body = await res.json().catch(() => null);
+    MASSIVE_API_KEY = String(body?.massive_api_key || "").trim();
+    console.log(
+      MASSIVE_API_KEY
+        ? "[worker-config] market-data key obtained from Base44"
+        : "[worker-config] Base44 returned no market-data key — Finnhub stays the feed"
+    );
+    return Boolean(MASSIVE_API_KEY);
+  } catch (err) {
+    console.error(`[worker-config] market-data key request failed (${err?.message || err}) — Finnhub stays the feed`);
     return false;
   }
 }
@@ -848,13 +895,17 @@ async function start() {
   // Resolve the bridge credentials FIRST, so the verification below and the engine's
   // book reads both see a configured bridge. One request, before any tick.
   await resolveBridgeConfig();
+  await resolveMassiveKey();
+
+  // Decide the price feed now that every key is known.
+  PRICE_FEED = resolveFeedMode();
 
   // Read-only database identity check. Deliberately NOT awaited: it must never
   // delay the first tick or the position sync, and it can never throw.
   verifyDatabase();
 
   // Price feed. Massive is prepared in every mode; in shadow it only compares.
-  massiveFeed.configure(process.env.MASSIVE_API_KEY);
+  massiveFeed.configure(MASSIVE_API_KEY);
   massiveFeed.enable(
     PRICE_FEED === "massive" ? "live" : PRICE_FEED === "massive-shadow" ? "shadow" : "off",
     routeTick
