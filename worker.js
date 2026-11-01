@@ -892,6 +892,16 @@ async function verifyDatabase() {
 async function start() {
   console.log("Starting DART NewA/B/C/A+ real-time tick router (paper, USD)...");
 
+  // Graceful stop. The price providers allow ONE stream per account, so this process
+  // must release its sockets before it exits — otherwise a redeploy's old instance
+  // holds the stream while the new one opens, and both get closed as duplicates.
+  process.on("SIGTERM", () => {
+    console.log("[worker] SIGTERM — releasing price feeds before exit");
+    try { massiveFeed.shutdown(); } catch (_) {}
+    try { if (ws) { ws.removeAllListeners(); ws.terminate(); } } catch (_) {}
+    process.exit(0);
+  });
+
   // Resolve the bridge credentials FIRST, so the verification below and the engine's
   // book reads both see a configured bridge. One request, before any tick.
   await resolveBridgeConfig();
