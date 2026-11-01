@@ -1,0 +1,184 @@
+// tickRules.js — THE FROZEN RULE SET for the Render tick-decision engine.
+//
+// Every constant here is a verbatim copy of ONE Base44 value, and the comment above
+// it names the file it came from. Nothing else in the Render engine may declare a
+// trading number: if a value belongs to a rule, it lives here, so a drift check
+// compares this file against Base44 and finds it in one place.
+//
+// Sources (2026-11-01):
+//   shared/liveTradeMath.ts        PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, STOP,
+//                                  the IBKR Canada tiered cost model, slippage, r2
+//   shared/cloneSystems.ts         CLONE_PRESS1, SYSTEM_HARD_STOP,
+//                                  SYSTEM_PARTIAL_PROFIT
+//   shared/protectiveStop.ts       the three rule sets and the per-system table
+//   shared/priceTrailingStop.ts    PRICE_TRAIL_PCT, C_PROFIT_TRAIL_TIERS
+//   shared/trendReversalVector.ts  LOSS_LEVELS
+//   shared/cloneTick.ts            VECTOR_THRESHOLD (THRESHOLD = 65)
+//   shared/systemHalt.ts           HALTED_SYSTEMS
+//
+// NO trading state, no I/O, no clock. Pure data plus pure helpers.
+
+// ---------------------------------------------------------------------------
+// liveTradeMath.ts
+// ---------------------------------------------------------------------------
+export const PRESS_SIZE_USD = 40000;
+export const PRESS2 = 700;
+export const PRESS3 = 800;
+export const TARGET = 900;
+export const STOP = -1700;
+// The upside grid's step (cloneTick.ts evaluates last_profit_level ± 100).
+export const GRID_STEP = 100;
+
+const COMM_PER_SHARE = 0.0035;
+const COMM_MIN = 0.35;
+const COMM_MAX_PCT = 0.01;
+const SEC_FEE_RATE = 0.0000278;
+const FINRA_TAF_PER_SHARE = 0.000166;
+const FINRA_TAF_MAX = 8.3;
+const EXCHANGE_CLEARING_PER_SHARE = 0.0002;
+
+export const SLIPPAGE_RATE = 0.0001;
+
+export const r2 = (v) => Math.round((Number(v) + Number.EPSILON) * 100) / 100;
+
+export function slippageCost(shares, price) {
+  return r2(shares * price * SLIPPAGE_RATE);
+}
+
+export function orderCost(shares, price, isSell) {
+  const notional = shares * price;
+  const commission = Math.min(Math.max(COMM_PER_SHARE * shares, COMM_MIN), COMM_MAX_PCT * notional);
+  const sec = isSell ? SEC_FEE_RATE * notional : 0;
+  const finra = isSell ? Math.min(FINRA_TAF_PER_SHARE * shares, FINRA_TAF_MAX) : 0;
+  const exchClear = EXCHANGE_CLEARING_PER_SHARE * shares;
+  return r2(commission + sec + finra + exchClear);
+}
+
+export function unrealized(side, currentPrice, shares, totalCostBasis) {
+  if (side === "long") return currentPrice * shares - totalCostBasis;
+  return totalCostBasis - currentPrice * shares;
+}
+
+// ---------------------------------------------------------------------------
+// cloneSystems.ts — Press 1 is the ONE setting that differs per system.
+// ---------------------------------------------------------------------------
+export const CLONE_PRESS1 = {
+  B: 250,
+  C: 250,
+  D: 250,
+  E: 250,
+  F: 200,
+  G: 250,
+  H: 300,
+  I: 350,
+  ANEW: 250,
+  APLUS: 100,
+};
+
+export function press1Threshold(system) {
+  const v = CLONE_PRESS1[String(system ?? "").trim().toUpperCase()];
+  if (Number.isFinite(Number(v))) return Number(v);
+  const c = CLONE_PRESS1.C;
+  return Number.isFinite(Number(c)) ? Number(c) : 250;
+}
+
+// cloneSystems.ts — the only hard-stop override that still exists.
+export const SYSTEM_HARD_STOP = { APLUS: -750 };
+
+export function systemStop(system) {
+  const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : STOP;
+}
+
+// cloneSystems.ts — partial profit-taking. A, B, F–I and APLUS have NO row and
+// therefore never sell partially: one comparison, no-op.
+export const SYSTEM_PARTIAL_PROFIT = {
+  C: { threshold: 2000, fraction: 0.5 },
+  D: { threshold: 1500, fraction: 0.5 },
+  E: { threshold: 1500, fraction: 0.5 },
+};
+
+export function partialProfitPolicy(system) {
+  const v = SYSTEM_PARTIAL_PROFIT[String(system ?? "").trim().toUpperCase()];
+  if (!v) return null;
+  const threshold = Number(v.threshold);
+  const fraction = Number(v.fraction);
+  if (!Number.isFinite(threshold) || !Number.isFinite(fraction)) return null;
+  if (!(fraction > 0) || !(fraction < 1)) return null;
+  return { threshold, fraction };
+}
+
+// ---------------------------------------------------------------------------
+// protectiveStop.ts — arm thresholds and the giveback.
+//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW) and DART B
+//   CD_RULE_SET stock 65 / market 85 — DART C, DART D, DART E
+//   C_RULE_SET  stock 65 / market 86 — the dormant clones F–I, ABTEST, APLUS
+// All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
+// protectivePolicy() does in Base44.
+// ---------------------------------------------------------------------------
+export const B_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 350 };
+export const CD_RULE_SET = { stockThreshold: 65, marketThreshold: 85, buffer: 350 };
+export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350 };
+
+export const PROTECTIVE_BY_SYSTEM = {
+  ANEW: B_RULE_SET,
+  B: B_RULE_SET,
+  C: CD_RULE_SET,
+  D: CD_RULE_SET,
+  A: B_RULE_SET,
+  ABTEST: C_RULE_SET,
+  E: CD_RULE_SET,
+  F: C_RULE_SET,
+  G: C_RULE_SET,
+  H: C_RULE_SET,
+  I: C_RULE_SET,
+  APLUS: C_RULE_SET,
+};
+
+export function protectivePolicy(system) {
+  return PROTECTIVE_BY_SYSTEM[String(system ?? "").trim().toUpperCase()] || C_RULE_SET;
+}
+
+// ---------------------------------------------------------------------------
+// priceTrailingStop.ts — the share-price trail, driven by PEAK unrealized profit.
+// ---------------------------------------------------------------------------
+export const PRICE_TRAIL_PCT = 0.0175;
+
+export const C_PROFIT_TRAIL_TIERS = [
+  { min_peak_pl: 3500, pct: 0.0035 },
+  { min_peak_pl: 2500, pct: 0.005 },
+  { min_peak_pl: 2000, pct: 0.0075 },
+  { min_peak_pl: 1500, pct: 0.01 },
+  { min_peak_pl: 900, pct: 0.0175 },
+];
+
+export function cProfitTrailPct(peakPl) {
+  const peak = Number(peakPl);
+  if (!Number.isFinite(peak)) return null;
+  for (const t of C_PROFIT_TRAIL_TIERS) if (peak >= t.min_peak_pl) return t.pct;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// trendReversalVector.ts + cloneTick.ts — the Vector exit threshold and the loss
+// checkpoints the downside Vector is evaluated at. Permanent: each level is
+// checked once per position.
+// ---------------------------------------------------------------------------
+export const VECTOR_THRESHOLD = 65;
+
+export const LOSS_LEVELS = [
+  -100, -200, -300, -400, -500, -600, -700, -800, -900,
+  -1000, -1100, -1200, -1300, -1400, -1500, -1600, -1700,
+];
+
+// ---------------------------------------------------------------------------
+// systemHalt.ts — C, D and E are halted. A halted account trades nothing: the
+// engine returns a no-op decision and writes nothing.
+// ---------------------------------------------------------------------------
+export const HALTED_SYSTEMS = ["C", "D", "E"];
+
+const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
+
+export function isSystemHalted(system) {
+  return HALTED.has(String(system ?? "").trim().toUpperCase());
+}
