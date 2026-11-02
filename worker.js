@@ -39,6 +39,7 @@ import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
 import * as engineLive from "./engineLive.js";
 import * as positionBook from "./positionBook.js";
+import { applyTick as recordBar, configure as configureCandles } from "./candleService.js";
 import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
 
@@ -463,10 +464,11 @@ async function applyEngineSwitches() {
     }
   }
 
-  // Seed only the symbols actually open, and only once per session — this is the
-  // only candle fetch the worker ever makes, and it never runs on the tick path.
+  // Seed the symbols actually open plus SPY — once per session, never on the tick
+  // path. SPY is included because the protective stop's market leg is scored on the
+  // SPY series, so without it that half of the test has no bars at all.
   try {
-    await engineShadow.primeSymbols([...symbolPositions.keys()]);
+    await engineShadow.primeSymbols([...symbolPositions.keys(), "SPY"]);
   } catch (err) {
     console.error(`[engine] candle seed: ${err.message}`);
   }
@@ -641,6 +643,11 @@ async function pumpMailbox(m, first) {
 
 function routeTick(symbol, price) {
   lastTick.set(symbol, Date.now());
+  // EVERY tick feeds the worker's own 1-minute series, whether or not a position is
+  // open in it. SPY is subscribed permanently, so the market leg of the protective
+  // stop gets real bars from the open instead of only an archived tail — before this
+  // the SPY series was never built at all, and the market test could not be scored.
+  recordBar(symbol, price);
 
   // Shadow mode: remember what Finnhub is quoting so Massive's prices can be
   // compared with it on the same symbol. Never affects the tick itself.
@@ -939,6 +946,10 @@ async function start() {
 
   // Decide the price feed now that every key is known.
   PRICE_FEED = resolveFeedMode();
+
+  // Hand the same market-data key to the candle series so it can seed the full
+  // session from the provider rather than the afternoon-only archive.
+  configureCandles(MASSIVE_API_KEY);
 
   // Read-only database identity check. Deliberately NOT awaited: it must never
   // delay the first tick or the position sync, and it can never throw.
