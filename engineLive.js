@@ -42,6 +42,7 @@ const stats = {
   guardMisses: 0,
   errors: 0,
   holds: 0,
+  armings: 0,
   needsVector: 0,
   refused: 0,
 };
@@ -101,6 +102,20 @@ export async function apply(ref, verdict) {
   }
 
   if (!WRITE_ACTIONS.has(verdict.action)) {
+    // ARMING IS ITS OWN STATE WRITE. A hold writes nothing — but the protective stop
+    // must be recorded the instant it arms, because every later tick's giveback is
+    // measured against that high-water. One guarded write here, never per tick.
+    if (verdict.arming_patch) {
+      stats.armings += 1;
+      const armed = await applyToBook(ref.system, ref.positionId, [verdict.arming_patch]);
+      if (armed.persisted) return { applied: true, reason: "protective_armed", fields: armed.fields };
+      if (armed.guardMiss) {
+        stats.guardMisses += 1;
+        return { applied: false, reason: "guard_miss" };
+      }
+      stats.errors += 1;
+      return { applied: false, reason: armed.error || "arming_write_failed" };
+    }
     stats.holds += 1;
     return { applied: false, reason: verdict.action };
   }
