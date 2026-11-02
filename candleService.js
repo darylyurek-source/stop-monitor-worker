@@ -17,10 +17,72 @@
 // No I/O happens per tick. Seeding is the only network call, and it is bounded
 // and de-duplicated so a burst of ticks cannot trigger a burst of fetches.
 
+import fetch from "node-fetch";
 import { listCandles } from "./bridge.js";
 
 const sessions = new Map(); // symbol -> { date, bars: [] }
 const seeding = new Map(); // symbol -> Promise (in-flight seed)
+
+// The provider's own 1-minute aggregates for the session.
+//
+// WHY THIS EXISTS: the archived series the worker used to seed from only covers the
+// afternoon (it began at 12:09 ET on 2026-10-30) and carries zero volume on many
+// bars — but the Vector scores the FORMING bar and volume is one of its seven
+// components. Seeding from the provider gives a full 9:30-16:00 series with real
+// size, for the stock and for SPY, so the protective stop's market leg can be
+// scored from the open instead of never.
+const AGGS_URL = "https://api.massive.com/v2/aggs/ticker";
+let providerKey = "";
+
+export function configure(key) {
+  providerKey = String(key || "").trim();
+}
+
+// The UTC instant of an ET wall-clock time on a date (handles EST/EDT).
+function etBoundaryMs(date, hh, mm) {
+  const target = `${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`;
+  const want = Date.parse(target);
+  let guess = want;
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", hourCycle: "h23",
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+  for (let i = 0; i < 2; i++) {
+    const parts = fmt.formatToParts(new Date(guess));
+    const g = (t) => Number((parts.find((p) => p.type === t) || {}).value);
+    const asIfUtc = Date.UTC(g("year"), g("month") - 1, g("day"), g("hour"), g("minute"));
+    guess += want - asIfUtc;
+  }
+  return guess;
+}
+
+// The session's bars from the provider, or [] when unavailable.
+export async function providerBars(symbol, date) {
+  if (!providerKey) return [];
+  try {
+    const url = `${AGGS_URL}/${encodeURIComponent(symbol)}/range/1/minute/${date}/${date}` +
+      `?adjusted=true&sort=asc&limit=50000&apiKey=${providerKey}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) return [];
+    const body = await res.json().catch(() => null);
+    const rows = body?.results || [];
+    const from = etBoundaryMs(date, 9, 30);
+    const to = etBoundaryMs(date, 16, 0);
+    return rows
+      .filter((r) => Number(r?.t) >= from && Number(r?.t) <= to && Number(r?.c) > 0)
+      .map((r) => ({
+        t: minuteStart(Number(r.t)),
+        open: Number(r.o) || Number(r.c),
+        high: Number(r.h) || Number(r.c),
+        low: Number(r.l) || Number(r.c),
+        close: Number(r.c),
+        volume: Number(r.v) || 0,
+      }))
+      .sort((a, b) => a.t - b.t);
+  } catch (_) {
+    return [];
+  }
+}
 
 const dateFmt = new Intl.DateTimeFormat("en-CA", {
   timeZone: "America/New_York",
@@ -59,13 +121,18 @@ export async function seed(symbol, date = etDate()) {
   if (seeding.has(symbol)) return seeding.get(symbol);
 
   const task = (async () => {
-    let rows = [];
-    try {
-      rows = await listCandles(symbol, date);
-    } catch (_) {
-      rows = []; // an unseeded symbol still runs: price-only rules never need candles
+    // Provider first: a full session with real volume. The archive is the fallback,
+    // and an unseeded symbol still runs — price-only rules never need candles.
+    let bars = await providerBars(symbol, date);
+    if (!bars.length) {
+      let rows = [];
+      try {
+        rows = await listCandles(symbol, date);
+      } catch (_) {
+        rows = [];
+      }
+      bars = rows.map(toBar).filter(Boolean).sort((a, b) => a.t - b.t);
     }
-    const bars = rows.map(toBar).filter(Boolean).sort((a, b) => a.t - b.t);
     const current = sessions.get(symbol);
     if (current && current.date === date) {
       // Keep bars built from ticks that are newer than the archived tail.
