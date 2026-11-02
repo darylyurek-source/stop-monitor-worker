@@ -513,13 +513,13 @@ async function forwardTick(ref, symbol, price) {
   // handler for this account already returns a no-op once its engine row says render.
   if (engineLive.ownsWrites(ref.system)) {
     const result = await engineLive.apply(ref, verdict);
-    if (result?.applied) {
+    if (result?.applied && result.reason !== "hold_state") {
       console.log(
         `[live] ${ref.system} ${symbol}: ${verdict.action}${verdict.event ? " " + verdict.event : ""}` +
         (verdict.pl_raw != null ? ` pl=${fmt(verdict.pl_raw)}` : "") +
         (verdict.exit_price != null ? ` @${fmt(verdict.exit_price)}` : "")
       );
-    } else if (result && result.reason !== "hold" && result.reason !== "not_owner") {
+    } else if (result && result.reason !== "hold" && result.reason !== "hold_state" && result.reason !== "not_owner") {
       console.error(`[live] ${ref.system} ${symbol}: ${verdict.action} not written (${result.reason})`);
     }
     return;

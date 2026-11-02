@@ -36,6 +36,10 @@ const WRITE_ACTIONS = new Set(["exit", "press", "partial", "grid"]);
 
 let switches = new Map(); // system -> { engine, mode }
 
+// Display marks on a hold are written at most this often per position.
+const MARK_INTERVAL_MS = 5000;
+const lastMark = new Map(); // "SYSTEM:id" -> ms of last mark write
+
 const stats = {
   writes: 0,
   persisted: 0,
@@ -43,6 +47,8 @@ const stats = {
   errors: 0,
   holds: 0,
   armings: 0,
+  ratchets: 0,
+  marks: 0,
   needsVector: 0,
   refused: 0,
 };
@@ -102,22 +108,34 @@ export async function apply(ref, verdict) {
   }
 
   if (!WRITE_ACTIONS.has(verdict.action)) {
-    // ARMING IS ITS OWN STATE WRITE. A hold writes nothing — but the protective stop
-    // must be recorded the instant it arms, because every later tick's giveback is
-    // measured against that high-water. One guarded write here, never per tick.
-    if (verdict.arming_patch) {
-      stats.armings += 1;
-      const armed = await applyToBook(ref.system, ref.positionId, [verdict.arming_patch]);
-      if (armed.persisted) return { applied: true, reason: "protective_armed", fields: armed.fields };
-      if (armed.guardMiss) {
-        stats.guardMisses += 1;
-        return { applied: false, reason: "guard_miss" };
-      }
-      stats.errors += 1;
-      return { applied: false, reason: armed.error || "arming_write_failed" };
+    // A HOLD STILL CARRIES STATE. Its prior_patches hold the arming write, the
+    // protective high-water ratchet and the price-trail extreme ratchet. Every later
+    // tick's protective giveback and trail are measured against those values, so they
+    // are written the moment they change (and land in the book at once). Display marks
+    // (current price, current P&L, peak) ride along, throttled per position, so the
+    // dashboard stays current without a database write on every tick.
+    const statePatches = Array.isArray(verdict.prior_patches) ? verdict.prior_patches.filter(Boolean) : [];
+    const key = `${ref.system}:${ref.positionId}`;
+    const now = Date.now();
+    const markDue = verdict.patch && now - (lastMark.get(key) || 0) >= MARK_INTERVAL_MS;
+    if (!statePatches.length && !markDue) {
+      stats.holds += 1;
+      return { applied: false, reason: verdict.action };
     }
-    stats.holds += 1;
-    return { applied: false, reason: verdict.action };
+    const patches = [...(markDue ? [verdict.patch] : []), ...statePatches];
+    if (verdict.arming_patch) stats.armings += 1;
+    if (statePatches.length) stats.ratchets += 1;
+    const res = await applyToBook(ref.system, ref.positionId, patches);
+    if (res.persisted) {
+      if (markDue) { lastMark.set(key, now); stats.marks += 1; }
+      return { applied: true, reason: verdict.arming_patch ? "protective_armed" : "hold_state", fields: res.fields };
+    }
+    if (res.guardMiss) {
+      stats.guardMisses += 1;
+      return { applied: false, reason: "guard_miss" };
+    }
+    stats.errors += 1;
+    return { applied: false, reason: res.error || res.reason || "hold_write_failed" };
   }
 
   const patches = [];
