@@ -47,6 +47,33 @@ import {
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
+// --- the 16:00 ET session end ------------------------------------------------
+// EOD Position Close closes every open position at the bell. The engine is the
+// executor once an account is Render's, so the same rule has to live here: without
+// it a position Render owns would stay open past the close.
+export const SESSION_CLOSE_MINUTE = 16 * 60;
+
+const etClockFmt = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+// Minute of the ET day (0-1439) for an instant, or 0 when it cannot be read.
+export function etMinuteOfDay(iso) {
+  try {
+    const parts = etClockFmt.formatToParts(new Date(iso));
+    const get = (t) => Number((parts.find((p) => p.type === t) || {}).value);
+    const h = get("hour");
+    const m = get("minute");
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return 0;
+    return h * 60 + m;
+  } catch (_) {
+    return 0;
+  }
+}
+
 // --- partialProfit.ts, reproduced exactly (banked profit is read from the sale
 // --- entries themselves; there is no second copy of it anywhere). ----------------
 
@@ -325,6 +352,17 @@ export function decideTick(args) {
         trail_protected: pt.active ? pt.protectedLevel : null,
         trail_breach: priceTrailBreach,
       },
+    };
+  }
+
+  // Rule 2b — the 16:00 ET session end. Checked after the stops so a genuine stop
+  // at the bell keeps its own reason, exactly as the live manager's close does.
+  if (etMinuteOfDay(nowIso) >= SESSION_CLOSE_MINUTE) {
+    return {
+      ...base,
+      ...buildExit({ pos, side, price, shares, tcb, reason: "close_1600", nowIso, nowMs, pl, priorPatches }),
+      pl_raw: pl,
+      session_close: true,
     };
   }
 
