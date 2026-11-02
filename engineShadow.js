@@ -19,6 +19,7 @@
 // recorded as lag, not as an engine defect.
 
 import { decideTick } from "./tickDecisionCore.js";
+import { assessProtectiveTrigger } from "./protectiveTrigger.js";
 import { applyTick, bars as candleBars, isSeeded, seed } from "./candleService.js";
 import { get as getPosition } from "./positionBook.js";
 import { bulkUpsertEntities, bridgeConfigured } from "./bridge.js";
@@ -94,14 +95,40 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   }
   state.ticks += 1;
   const series = applyTick(symbol, price, nowMs);
+  const nowIso = new Date(nowMs).toISOString();
+
+  // PROTECTIVE STOP — assessed first, on the same bars, exactly as the live manager
+  // arms before the tick decides. Without this the engine can ENFORCE the $350
+  // giveback but can never ARM it, so on an account Render owned the stop would
+  // simply never fire (13 of 27 exits on 2026-10-30 were protective stops).
+  // The patch travels on the verdict so the live writer persists it — merged into
+  // the decision's own write when there is one, on its own when there is not.
+  let effective = pos;
+  let arming = null;
+  if (!pos.protective_stop_active && Number(pos.shares) > 0) {
+    try {
+      arming = assessProtectiveTrigger({
+        system: ref.system,
+        position: pos,
+        nowIso,
+        price,
+        candles: series && series.length ? series : null,
+        marketCandles: candleBars("SPY"),
+      });
+    } catch (err) {
+      console.error(`[shadow] arming ${ref.system} ${symbol}: ${err?.message || err}`);
+    }
+    if (arming && arming.action === "activate") effective = { ...pos, ...arming.patch };
+  }
+
   const started = process.hrtime.bigint();
   let verdict = null;
   try {
     verdict = decideTick({
       system: ref.system,
-      position: pos,
+      position: effective,
       price,
-      nowIso: new Date(nowMs).toISOString(),
+      nowIso,
       candles: series && series.length ? series : undefined,
     });
   } catch (err) {
@@ -113,6 +140,19 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   state.decideMicros.push(Math.round(micros));
   if (state.decideMicros.length > 5000) state.decideMicros.shift();
   state.decisions += 1;
+
+  // Carry the arming write on the verdict: first in prior_patches so a decision that
+  // also writes lands both fields in one guarded update.
+  if (verdict && arming && arming.action === "activate") {
+    verdict.arming_patch = arming.patch;
+    verdict.arming = {
+      triggered_by: arming.triggered_by,
+      stock_score: arming.stock_score,
+      market_score: arming.market_score,
+      reference_price: arming.reference_price,
+    };
+    verdict.prior_patches = [arming.patch, ...(verdict.prior_patches || [])];
+  }
   return verdict;
 }
 
