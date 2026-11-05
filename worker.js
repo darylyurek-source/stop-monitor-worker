@@ -228,6 +228,14 @@ const symbolPositions = new Map();
 // symbol -> ms of last price seen (WS tick or REST quote)
 const lastTick = new Map();
 
+// symbol -> the last price routeTick accepted. The REST fallback is bounded against
+// this so one bad quote cannot reprice the book.
+const lastPrice = new Map();
+
+// A fallback quote may not describe an older session, and may not jump the book.
+const FALLBACK_MAX_QUOTE_AGE_MS = 60000;
+const FALLBACK_MAX_DEVIATION = 0.03;
+
 // positionId -> one-slot mailbox carrying that position's next price.
 //
 //   { inFlight: boolean, pending: { ref, symbol, price } | null }
@@ -643,6 +651,7 @@ async function pumpMailbox(m, first) {
 
 function routeTick(symbol, price) {
   lastTick.set(symbol, Date.now());
+  lastPrice.set(symbol, price);
   // EVERY tick feeds the worker's own 1-minute series, whether or not a position is
   // open in it. SPY is subscribed permanently, so the market leg of the protective
   // stop gets real bars from the open instead of only an archived tail — before this
@@ -842,10 +851,34 @@ async function pollQuietSymbols() {
         if (!res.ok) continue;
 
         const q = await res.json();
+        // q.t is when the quote was last updated (epoch seconds). A quote older than
+        // the limit describes a finished session — its `c` is that session's close,
+        // and routing it would value an open position off a dead tape.
+        const quoteTs = numberOrNull(q && q.t);
+        const ageMs = quoteTs ? Date.now() - quoteTs * 1000 : null;
+        if (ageMs == null || ageMs > FALLBACK_MAX_QUOTE_AGE_MS) {
+          console.warn(
+            `[quote] ${symbol} REJECTED — ` +
+            (ageMs == null ? "quote carries no timestamp" : `quote is ${Math.round(ageMs / 1000)}s old`) +
+            ` (limit ${FALLBACK_MAX_QUOTE_AGE_MS / 1000}s)`
+          );
+          continue;
+        }
         price = numberOrNull(q && q.c);
       }
 
       if (price && price > 0) {
+        // Bound the fallback against the last price actually accepted for this
+        // symbol: a print that far from the book is a bad quote, not a move.
+        const previous = lastPrice.get(symbol);
+        const deviation = previous ? Math.abs(price - previous) / previous : 0;
+        if (previous && deviation > FALLBACK_MAX_DEVIATION) {
+          console.warn(
+            `[quote] ${symbol} REJECTED — ${price} is ${(deviation * 100).toFixed(2)}% ` +
+            `away from the last price ${previous} (limit ${(FALLBACK_MAX_DEVIATION * 100).toFixed(0)}%)`
+          );
+          continue;
+        }
         routeTick(symbol, price);
       }
     } catch (err) {
