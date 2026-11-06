@@ -51,7 +51,7 @@ function check(name, actual, expected) {
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C")], [250, 250, 250]);
 check("hard stop per system", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -1700]);
 check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 65, 85, 350]);
-check("partial profit only C/D/E", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C").threshold, partialProfitPolicy("D").threshold, partialProfitPolicy("E").threshold], [null, null, 2000, 1500, 1500]);
+check("partial profit only D/E (C's half sale removed 2026-11-06)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D").threshold, partialProfitPolicy("E").threshold], [null, null, null, 1500, 1500]);
 
 // --- 1. HARD STOP (A) ---------------------------------------------------------
 // long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
