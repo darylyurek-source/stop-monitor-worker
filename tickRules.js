@@ -119,8 +119,9 @@ export function partialProfitPolicy(system) {
 
 // ---------------------------------------------------------------------------
 // protectiveStop.ts — arm thresholds and the giveback.
-//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW) and DART B
-//   CD_RULE_SET stock 65 / market 85 — DART C, DART D, DART E
+//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B, and (from 2026-11-06)
+//              DART C, so C now differs from B in one rule only: its +$2,000 auto-arm
+//   CD_RULE_SET stock 65 / market 85 — DART D and DART E (both halted)
 //   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
 // All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
 // protectivePolicy() does in Base44.
@@ -132,7 +133,10 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  C: CD_RULE_SET,
+  // DART C moved to B's 55/65 on 2026-11-06 (before the open), at the same time its
+  // half sale was removed: with the Vector test matched to B, C's ONLY difference
+  // from B is that its $350 stop arms by itself at +$2,000 (AUTO_ARM_PL_BY_SYSTEM).
+  C: B_RULE_SET,
   D: CD_RULE_SET,
   E: CD_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
