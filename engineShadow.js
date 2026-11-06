@@ -20,6 +20,7 @@
 
 import { decideTick } from "./tickDecisionCore.js";
 import { assessProtectiveTrigger } from "./protectiveTrigger.js";
+import { autoArmPolicy } from "./tickRules.js";
 import { applyTick, bars as candleBars, isSeeded, seed } from "./candleService.js";
 import { get as getPosition } from "./positionBook.js";
 import { bulkUpsertEntities, bridgeConfigured } from "./bridge.js";
@@ -153,6 +154,32 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
     };
     verdict.prior_patches = [arming.patch, ...(verdict.prior_patches || [])];
   }
+
+  // DART C's OWN RULE (in force from 2026-11-06, before the open): with the half sale
+  // removed C runs B's rules, and arms the $350 giveback AUTOMATICALLY the moment a
+  // position's P&L reaches +$2,000 — no Vector test. Below +$2,000 the Vector test
+  // above is untouched, so the two paths are: auto-arm at +$2,000, or the Vector test
+  // arming it earlier. C only; A, B, D and E have no row here.
+  const autoArmAt = autoArmPolicy(ref.system);
+  if (
+    verdict &&
+    autoArmAt != null &&
+    verdict.action !== "exit" &&
+    !(arming && arming.action === "activate") &&
+    !effective.protective_stop_active &&
+    Number.isFinite(Number(verdict.pl_raw)) &&
+    Number(verdict.pl_raw) >= autoArmAt
+  ) {
+    const autoPatch = {
+      protective_stop_active: true,
+      protective_high_water_pl: Math.round(Number(verdict.pl_raw) * 100) / 100,
+      protective_triggered_time: nowIso,
+    };
+    verdict.arming_patch = autoPatch;
+    verdict.arming = { triggered_by: "auto_arm_2000" };
+    verdict.prior_patches = [autoPatch, ...(verdict.prior_patches || [])];
+  }
+
   return verdict;
 }
 
