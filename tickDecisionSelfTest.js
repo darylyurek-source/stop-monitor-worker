@@ -50,7 +50,7 @@ function check(name, actual, expected) {
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C")], [250, 250, 250]);
 check("hard stop per system", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -1700]);
-check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 65, 85, 350]);
+check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 55, 65, 350]);
 check("partial profit only D/E (C's half sale removed 2026-11-06)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D").threshold, partialProfitPolicy("E").threshold], [null, null, null, 1500, 1500]);
 
 // --- 1. HARD STOP (A) ---------------------------------------------------------
