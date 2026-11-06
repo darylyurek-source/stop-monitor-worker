@@ -88,11 +88,24 @@ export function systemStop(system) {
 
 // cloneSystems.ts — partial profit-taking. A and B have NO row and therefore never
 // sell partially: one comparison, no-op. D and E keep their rows while halted.
+// DART C's row was REMOVED on 2026-11-06 (before the open): C runs B's rules with no
+// partial sale at all. D and E keep their rows (both halted).
 export const SYSTEM_PARTIAL_PROFIT = {
-  C: { threshold: 2000, fraction: 0.5 },
   D: { threshold: 1500, fraction: 0.5 },
   E: { threshold: 1500, fraction: 0.5 },
 };
+
+// DART C's ONE addition (2026-11-06): the $350 protective stop arms automatically the
+// moment a position's P&L reaches +$2,000 — no Vector test. Below +$2,000 the Vector
+// test is unchanged. No other system has a row, so its single comparison is a no-op.
+export const AUTO_ARM_PL_BY_SYSTEM = {
+  C: 2000,
+};
+
+export function autoArmPolicy(system) {
+  const v = AUTO_ARM_PL_BY_SYSTEM[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : null;
+}
 
 export function partialProfitPolicy(system) {
   const v = SYSTEM_PARTIAL_PROFIT[String(system ?? "").trim().toUpperCase()];
