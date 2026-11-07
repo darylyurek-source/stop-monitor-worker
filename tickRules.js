@@ -95,17 +95,18 @@ export const SYSTEM_PARTIAL_PROFIT = {
   E: { threshold: 1500, fraction: 0.5 },
 };
 
-// THE +$2,000 AUTO-ARM — DART B's rule from 2026-11-09, before that Monday's open.
-// It was DART C's from 2026-11-06 and was MOVED to B on 2026-11-07 at the owner's
-// direction, which makes C the control: C arms on the Vector test only, at B's
-// original 55/65. Nothing else changed for either account.
+// THE +$2,000 AUTO-ARM — DART B's rule from 2026-11-09, before that Monday's open,
+// and DART A's (ANEW) from the same date at the owner's direction. It was DART C's
+// from 2026-11-06 and was MOVED to B on 2026-11-07, which makes C the control: C arms
+// on the Vector test only, at B's original 55/65. Nothing else changed anywhere.
 //
 // The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
 // automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
-// position can still arm earlier on deterioration. Only B has a row; every other
-// system resolves to null and its single comparison is a no-op.
+// position can still arm earlier on deterioration. A and B have the row (identical,
+// +$2,000); C, D and E have none and their single comparison is a no-op.
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
+  ANEW: 2000,
 };
 
 export function autoArmPolicy(system) {
@@ -125,8 +126,8 @@ export function partialProfitPolicy(system) {
 
 // ---------------------------------------------------------------------------
 // protectiveStop.ts — arm thresholds and the giveback.
-//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B and DART C. A and C arm
-//              on the Vector test only; B (from 2026-11-09) also arms at +$2,000
+//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B and DART C. C arms
+//              on the Vector test only; A and B (from 2026-11-09) also arm at +$2,000
 //   CD_RULE_SET stock 65 / market 85 — DART D and DART E (both halted)
 //   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
 // All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
