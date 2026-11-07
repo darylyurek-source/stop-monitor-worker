@@ -124,6 +124,10 @@ export function noteFinnhubPrice(symbol, price) {
 }
 
 // Quiet-symbol fallback: one snapshot per symbol, no per-minute ceiling.
+// A snapshot's last trade older than this describes a finished tape, not a live
+// price. Same limit as the Finnhub quiet-symbol guard (FALLBACK_MAX_QUOTE_AGE_MS).
+export const SNAPSHOT_MAX_TRADE_AGE_MS = 60000;
+
 export async function snapshotPrice(symbol) {
   if (!apiKey) return null;
   try {
@@ -134,8 +138,29 @@ export async function snapshotPrice(symbol) {
     if (!res.ok) return null;
     const body = await res.json().catch(() => null);
     const ticker = body?.ticker || null;
-    const price = Number(ticker?.lastTrade?.p ?? ticker?.day?.c ?? ticker?.min?.c);
-    return Number.isFinite(price) && price > 0 ? price : null;
+
+    // ONLY the last trade is a price. day.c and min.c are the session's and the
+    // minute's close — the last value of a dead tape — so they are never a
+    // substitute: a symbol with no recent print returns null and waits.
+    const price = Number(ticker?.lastTrade?.p);
+    const stamp = Number(ticker?.lastTrade?.t);
+    const tradeMs = Number.isFinite(stamp) && stamp > 0 ? (stamp >= 1e12 ? stamp : stamp * 1000) : null;
+    const ageMs = tradeMs == null ? null : Date.now() - tradeMs;
+
+    if (!Number.isFinite(price) || price <= 0) return null;
+    if (ageMs == null || ageMs < 0 || ageMs > SNAPSHOT_MAX_TRADE_AGE_MS) {
+      console.warn(
+        `[quote] ${symbol} REJECTED — ` +
+        (ageMs == null
+          ? "Massive snapshot carries no trade timestamp"
+          : ageMs < 0
+            ? `Massive snapshot trade stamp is ${Math.round(-ageMs / 1000)}s in the future`
+            : `Massive snapshot trade is ${Math.round(ageMs / 1000)}s old`) +
+        ` (limit ${SNAPSHOT_MAX_TRADE_AGE_MS / 1000}s)`
+      );
+      return null;
+    }
+    return price;
   } catch (err) {
     stats.lastError = String(err?.message || err).slice(0, 120);
     return null;
