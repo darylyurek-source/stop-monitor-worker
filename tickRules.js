@@ -95,11 +95,17 @@ export const SYSTEM_PARTIAL_PROFIT = {
   E: { threshold: 1500, fraction: 0.5 },
 };
 
-// DART C's ONE addition (2026-11-06): the $350 protective stop arms automatically the
-// moment a position's P&L reaches +$2,000 — no Vector test. Below +$2,000 the Vector
-// test is unchanged. No other system has a row, so its single comparison is a no-op.
+// THE +$2,000 AUTO-ARM — DART B's rule from 2026-11-09, before that Monday's open.
+// It was DART C's from 2026-11-06 and was MOVED to B on 2026-11-07 at the owner's
+// direction, which makes C the control: C arms on the Vector test only, at B's
+// original 55/65. Nothing else changed for either account.
+//
+// The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
+// automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
+// position can still arm earlier on deterioration. Only B has a row; every other
+// system resolves to null and its single comparison is a no-op.
 export const AUTO_ARM_PL_BY_SYSTEM = {
-  C: 2000,
+  B: 2000,
 };
 
 export function autoArmPolicy(system) {
@@ -119,8 +125,8 @@ export function partialProfitPolicy(system) {
 
 // ---------------------------------------------------------------------------
 // protectiveStop.ts — arm thresholds and the giveback.
-//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B, and (from 2026-11-06)
-//              DART C, so C now differs from B in one rule only: its +$2,000 auto-arm
+//   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B and DART C. A and C arm
+//              on the Vector test only; B (from 2026-11-09) also arms at +$2,000
 //   CD_RULE_SET stock 65 / market 85 — DART D and DART E (both halted)
 //   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
 // All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
@@ -133,9 +139,9 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  // DART C moved to B's 55/65 on 2026-11-06 (before the open), at the same time its
-  // half sale was removed: with the Vector test matched to B, C's ONLY difference
-  // from B is that its $350 stop arms by itself at +$2,000 (AUTO_ARM_PL_BY_SYSTEM).
+  // DART C moved to B's 55/65 on 2026-11-06 and lost the +$2,000 auto-arm on
+  // 2026-11-09: C now runs B's ORIGINAL rule set exactly — the Vector test only —
+  // and is the control B is measured against.
   C: B_RULE_SET,
   D: CD_RULE_SET,
   E: CD_RULE_SET,

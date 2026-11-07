@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -159,6 +159,19 @@ check("the engine's score is the Vector module's own", t16.vector_score, compute
 // and when opted in the decision must match Base44 rather than deferring.
 const t17 = decideTick({ system: "B", position: pos(), price: 99.4, nowIso: NOW, liveZeroFallback: true });
 check("live zero fallback decides instead of deferring", [t17.action, t17.event, t17.vector_source], ["hold", "vector_checkpoint_hold", "live_zero_fallback"]);
+
+// --- 18. THE +$2,000 AUTO-ARM (moved from C to B on 2026-11-07, live 2026-11-09) --
+// decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
+// These pin the table so the row cannot move back silently.
+check("B arms its $350 stop at +$2,000", autoArmPolicy("B"), 2000);
+check("C is the control — no automatic arming", autoArmPolicy("C"), null);
+check("A, D and E do not auto-arm", [autoArmPolicy("ANEW"), autoArmPolicy("D"), autoArmPolicy("E")], [null, null, null]);
+// C's Vector test must stay B's original 55/65, and B's own must be untouched.
+check(
+  "B and C arm the Vector test identically",
+  [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold],
+  [55, 65, 55, 65]
+);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;

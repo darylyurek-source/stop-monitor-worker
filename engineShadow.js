@@ -155,11 +155,12 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
     verdict.prior_patches = [arming.patch, ...(verdict.prior_patches || [])];
   }
 
-  // DART C's OWN RULE (in force from 2026-11-06, before the open): with the half sale
-  // removed C runs B's rules, and arms the $350 giveback AUTOMATICALLY the moment a
-  // position's P&L reaches +$2,000 — no Vector test. Below +$2,000 the Vector test
-  // above is untouched, so the two paths are: auto-arm at +$2,000, or the Vector test
-  // arming it earlier. C only; A, B, D and E have no row here.
+  // DART B's RULE FROM 2026-11-09 (before that Monday's open): the $350 giveback arms
+  // AUTOMATICALLY the moment a position's P&L reaches +$2,000 — no Vector test. Below
+  // +$2,000 the Vector test above is untouched, so the two paths are: auto-arm at
+  // +$2,000, or the Vector test arming it earlier. The level moved here from DART C on
+  // 2026-11-07, which makes C the control (Vector test only). B only; A, C, D and E
+  // have no row here.
   const autoArmAt = autoArmPolicy(ref.system);
   if (
     verdict &&
@@ -176,7 +177,7 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
       protective_triggered_time: nowIso,
     };
     verdict.arming_patch = autoPatch;
-    verdict.arming = { triggered_by: "auto_arm_2000" };
+    verdict.arming = { triggered_by: `auto_arm_${autoArmAt}` };
     verdict.prior_patches = [autoPatch, ...(verdict.prior_patches || [])];
   }
 
