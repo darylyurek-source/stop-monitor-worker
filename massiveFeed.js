@@ -128,6 +128,17 @@ export function noteFinnhubPrice(symbol, price) {
 // price. Same limit as the Finnhub quiet-symbol guard (FALLBACK_MAX_QUOTE_AGE_MS).
 export const SNAPSHOT_MAX_TRADE_AGE_MS = 60000;
 
+// Massive stamps its trades in a compact epoch (measured on this key: microseconds).
+// Resolve the unit from the magnitude instead of assuming one, so the age is real.
+function stampToMs(stamp) {
+  const n = Number(stamp);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 1e17) return n / 1e6; // nanoseconds
+  if (n >= 1e14) return n / 1e3; // microseconds
+  if (n >= 1e12) return n;       // milliseconds
+  return n * 1000;               // seconds
+}
+
 export async function snapshotPrice(symbol) {
   if (!apiKey) return null;
   try {
@@ -143,8 +154,7 @@ export async function snapshotPrice(symbol) {
     // minute's close — the last value of a dead tape — so they are never a
     // substitute: a symbol with no recent print returns null and waits.
     const price = Number(ticker?.lastTrade?.p);
-    const stamp = Number(ticker?.lastTrade?.t);
-    const tradeMs = Number.isFinite(stamp) && stamp > 0 ? (stamp >= 1e12 ? stamp : stamp * 1000) : null;
+    const tradeMs = stampToMs(ticker?.lastTrade?.t);
     const ageMs = tradeMs == null ? null : Date.now() - tradeMs;
 
     if (!Number.isFinite(price) || price <= 0) return null;
