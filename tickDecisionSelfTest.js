@@ -164,8 +164,9 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
 check("B arms its $350 stop at +$2,000", autoArmPolicy("B"), 2000);
+check("A arms its $350 stop at the same +$2,000", autoArmPolicy("ANEW"), 2000);
 check("C is the control — no automatic arming", autoArmPolicy("C"), null);
-check("A, D and E do not auto-arm", [autoArmPolicy("ANEW"), autoArmPolicy("D"), autoArmPolicy("E")], [null, null, null]);
+check("C, D and E do not auto-arm", [autoArmPolicy("C"), autoArmPolicy("D"), autoArmPolicy("E")], [null, null, null]);
 // C's Vector test must stay B's original 55/65, and B's own must be untouched.
 check(
   "B and C arm the Vector test identically",
