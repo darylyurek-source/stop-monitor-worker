@@ -51,11 +51,114 @@ let stableTimer = null;
 const live = new Set();
 
 const subs = new Set();
-const finnhubPrice = new Map(); // symbol -> { price, at } — shadow comparison only
+const finnhubPrice = new Map(); // symbol -> { price, at, tMs } — shadow comparison only
 const lastTrade = new Map();    // symbol -> { price, at }
 
 const stats = { connects: 0, closes: 0, trades: 0, reconnects: 0, refusals: 0, lastError: null };
 const shadow = { samples: 0, within: 0, sumAbsDelta: 0, widest: 0 };
+
+// ------------------------------------------------------------
+// LAG MEASUREMENT (shadow mode only)
+//
+// "Which feed is more current?" is a question about TRANSIT: how long a print takes
+// to reach this process after the venue stamped it. Both providers stamp their own
+// prints — Massive on the trade frame (`t`), Finnhub on the trade object (`t`) — so
+// every print is measured against the same arrival clock:
+//
+//   transit = arrival − exchange stamp
+//
+// The feed with the smaller transit hands this worker the fresher price; the gap
+// between the two means is the head start one feed has over the other. Nothing here
+// can change a decision: it observes prints that have already been routed (or, in
+// shadow mode, not routed at all).
+//
+// The second question — do the price differences come FROM lag? — is answered by
+// bucketing every compared pair by how far apart its two prints were in EXCHANGE
+// time. If prices still disagree when the two prints are within a tenth of a
+// second, the disagreement is not delivery lag.
+// ------------------------------------------------------------
+const TRANSIT_BUCKETS = [100, 500, 1000, 2000, 5000]; // ms upper bounds
+const PAIR_BUCKETS = [100, 500, 1000, 5000];          // ms upper bounds on print gap
+
+function emptyTransit() {
+  return {
+    n: 0, sum: 0,
+    nostamp: 0,   // print carried no usable exchange stamp
+    outliers: 0,  // stamp in the future or far in the past — a clock disagreement, not a delay
+    buckets: TRANSIT_BUCKETS.map(() => 0),
+    over: 0,
+  };
+}
+
+const lag = {
+  massive: emptyTransit(),
+  finnhub: emptyTransit(),
+  pairs: PAIR_BUCKETS.map((max) => ({ max, n: 0, sumAbs: 0, within: 0 })),
+  pairsUnstamped: 0,
+};
+
+function noteTransit(bucket, exchangeMs, at) {
+  const stamp = Number(exchangeMs);
+  if (!Number.isFinite(stamp) || stamp <= 0) {
+    bucket.nostamp += 1;
+    return;
+  }
+  const transit = at - stamp;
+  if (!Number.isFinite(transit) || transit < -2000 || transit > 120000) {
+    bucket.outliers += 1;
+    return;
+  }
+  bucket.n += 1;
+  bucket.sum += transit;
+  if (transit <= 100) bucket.buckets[0] += 1;
+  else if (transit <= 500) bucket.buckets[1] += 1;
+  else if (transit <= 1000) bucket.buckets[2] += 1;
+  else if (transit <= 2000) bucket.buckets[3] += 1;
+  else if (transit <= 5000) bucket.buckets[4] += 1;
+  else bucket.over += 1;
+}
+
+// Smallest bucket upper bound holding at least `share` of the samples, from the
+// retained buckets. Null means the tail was slower than the last bucket.
+function percentileOf(bucket, share) {
+  if (!bucket.n) return null;
+  const target = bucket.n * share;
+  let seen = 0;
+  for (let i = 0; i < bucket.buckets.length; i += 1) {
+    seen += bucket.buckets[i];
+    if (seen >= target) return TRANSIT_BUCKETS[i];
+  }
+  return null;
+}
+
+function transitText(bucket) {
+  if (!bucket.n) {
+    return `no stamped prints yet${bucket.nostamp ? ` (${bucket.nostamp} unstamped)` : ""}`;
+  }
+  const p50 = percentileOf(bucket, 0.5);
+  const p90 = percentileOf(bucket, 0.9);
+  return (
+    `n=${bucket.n} mean=${Math.round(bucket.sum / bucket.n)}ms` +
+    ` p50=${p50 == null ? ">5000ms" : `<=${p50}ms`}` +
+    ` p90=${p90 == null ? ">5000ms" : `<=${p90}ms`}` +
+    (bucket.outliers ? ` outliers=${bucket.outliers}` : "")
+  );
+}
+
+function lagLines() {
+  const pairText = lag.pairs
+    .map((b) =>
+      `<=${b.max}ms n=${b.n}` +
+      ` mean|d|=${b.n ? `$${(b.sumAbs / b.n).toFixed(4)}` : "-"}` +
+      ` within5c=${b.n ? `${((100 * b.within) / b.n).toFixed(1)}%` : "-"}`
+    )
+    .join(" | ");
+  return [
+    `[lag] transit — massive ${transitText(lag.massive)} || finnhub ${transitText(lag.finnhub)}`,
+    `[lag] price gap by print gap — ${pairText}` +
+      (lag.pairsUnstamped ? ` || ${lag.pairsUnstamped} pairs without stamps` : ""),
+  ];
+}
 
 export function configure(key) {
   apiKey = String(key || "");
@@ -83,6 +186,9 @@ export function start() {
           ? ` | shadow ${sh.samples} samples, ${sh.within} within $0.05, mean $${sh.mean.toFixed(3)}, widest $${sh.widest.toFixed(2)}`
           : "")
       );
+      // Cumulative lag totals, so the last line before the close is the whole
+      // session's measurement and needs no reconstruction from samples.
+      if (mode === "shadow") for (const line of lagLines()) console.log(line);
     }, REPORT_EVERY_MS);
   }
   return true;
@@ -115,12 +221,18 @@ export function setSymbols(symbols) {
 }
 
 // The worker calls this for every Finnhub tick while in shadow mode, so the two
-// feeds are compared on the same symbol at (almost) the same instant.
-export function noteFinnhubPrice(symbol, price) {
+// feeds are compared on the same symbol at (almost) the same instant. It also
+// carries Finnhub's own stamp for the print (`t`, epoch ms), which is what makes the
+// transit measurement possible — the same measurement Massive's prints get below.
+export function noteFinnhubPrice(symbol, price, exchangeMs) {
   if (mode !== "shadow") return;
   const numeric = Number(price);
   if (!Number.isFinite(numeric) || numeric <= 0) return;
-  finnhubPrice.set(String(symbol || "").toUpperCase(), { price: numeric, at: Date.now() });
+  const at = Date.now();
+  const stamp = Number(exchangeMs);
+  const tMs = Number.isFinite(stamp) && stamp > 0 ? stamp : null;
+  finnhubPrice.set(String(symbol || "").toUpperCase(), { price: numeric, at, tMs });
+  noteTransit(lag.finnhub, tMs, at);
 }
 
 // Quiet-symbol fallback: one snapshot per symbol, no per-minute ceiling.
@@ -187,6 +299,30 @@ export function shadowSummary() {
     within: shadow.within,
     widest: shadow.widest,
     mean: shadow.samples ? shadow.sumAbsDelta / shadow.samples : 0,
+  };
+}
+
+// The lag measurement as data: each feed's transit (arrival − exchange stamp) and
+// the price gap split by print gap. Purely observational — no trading code reads it.
+export function lagSummary() {
+  const describe = (b) => ({
+    stamped: b.n,
+    meanMs: b.n ? Math.round(b.sum / b.n) : null,
+    p50Ms: percentileOf(b, 0.5),
+    p90Ms: percentileOf(b, 0.9),
+    unstamped: b.nostamp,
+    outliers: b.outliers,
+  });
+  return {
+    massive: describe(lag.massive),
+    finnhub: describe(lag.finnhub),
+    pairs: lag.pairs.map((b) => ({
+      printGapMs: b.max,
+      n: b.n,
+      meanAbsDelta: b.n ? +(b.sumAbs / b.n).toFixed(4) : null,
+      within5cPct: b.n ? +((100 * b.within) / b.n).toFixed(1) : null,
+    })),
+    pairsUnstamped: lag.pairsUnstamped,
   };
 }
 
@@ -317,7 +453,9 @@ function handle(raw) {
     if (frame.ev === "T") {
       const symbol = String(frame.sym || "").toUpperCase();
       const price = Number(frame.p);
-      if (symbol && Number.isFinite(price) && price > 0) publish(symbol, price);
+      // The frame carries the venue's own stamp; keeping it is what lets this print
+      // be measured against its arrival time (and against Finnhub's print).
+      if (symbol && Number.isFinite(price) && price > 0) publish(symbol, price, stampToMs(frame.t));
     }
   }
 }
@@ -358,9 +496,11 @@ function onStatus(frame) {
   }
 }
 
-function publish(symbol, price) {
+function publish(symbol, price, exchangeMs) {
+  const at = Date.now();
   stats.trades += 1;
-  lastTrade.set(symbol, { price, at: Date.now() });
+  lastTrade.set(symbol, { price, at });
+  noteTransit(lag.massive, exchangeMs, at);
 
   if (mode === "live") {
     try {
@@ -371,11 +511,11 @@ function publish(symbol, price) {
     return;
   }
 
-  compareWithFinnhub(symbol, price);
+  compareWithFinnhub(symbol, price, exchangeMs);
 }
 
 // Shadow mode only: how far apart are the two feeds on the same symbol?
-function compareWithFinnhub(symbol, price) {
+function compareWithFinnhub(symbol, price, exchangeMs) {
   const reference = finnhubPrice.get(symbol);
   if (!reference || Date.now() - reference.at > SHADOW_WINDOW_MS) return;
 
@@ -383,6 +523,22 @@ function compareWithFinnhub(symbol, price) {
   shadow.samples += 1;
   shadow.sumAbsDelta += delta;
   if (delta <= 0.05) shadow.within += 1;
+
+  // LAG CROSS-TAB: the same price difference, split by how far apart the two prints
+  // were in exchange time. A pair stamped within 100 ms of each other describes the
+  // same moment in the market, so if those pairs disagree as much as the wide ones,
+  // the disagreement is between the two tapes, not between two delivery speeds.
+  const stamp = Number(exchangeMs);
+  if (!Number.isFinite(stamp) || stamp <= 0 || !reference.tMs) {
+    lag.pairsUnstamped += 1;
+  } else {
+    const gap = Math.abs(stamp - reference.tMs);
+    const bucket = lag.pairs.find((b) => gap <= b.max) || lag.pairs[lag.pairs.length - 1];
+    bucket.n += 1;
+    bucket.sumAbs += delta;
+    if (delta <= 0.05) bucket.within += 1;
+  }
+
   if (delta > shadow.widest) {
     shadow.widest = delta;
     console.log(

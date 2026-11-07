@@ -649,7 +649,10 @@ async function pumpMailbox(m, first) {
   }
 }
 
-function routeTick(symbol, price) {
+// exchangeMs is the venue's own stamp on this print, when the caller has one
+// (Finnhub's socket tick carries `t`). It is used ONLY by the shadow comparison's
+// lag measurement and never reaches a trading rule or a stored price.
+function routeTick(symbol, price, exchangeMs) {
   lastTick.set(symbol, Date.now());
   lastPrice.set(symbol, price);
   // EVERY tick feeds the worker's own 1-minute series, whether or not a position is
@@ -660,7 +663,10 @@ function routeTick(symbol, price) {
 
   // Shadow mode: remember what Finnhub is quoting so Massive's prices can be
   // compared with it on the same symbol. Never affects the tick itself.
-  if (PRICE_FEED === "massive-shadow") massiveFeed.noteFinnhubPrice(symbol, price);
+  // The print's own stamp travels with it, so the comparison can measure transit on
+  // both feeds instead of only on Massive's. A REST fallback price carries no trade
+  // stamp and is counted as unstamped rather than timed.
+  if (PRICE_FEED === "massive-shadow") massiveFeed.noteFinnhubPrice(symbol, price, exchangeMs);
 
   const refs = symbolPositions.get(symbol);
   if (!refs || refs.length === 0) return;
@@ -749,7 +755,8 @@ function connectWebSocket() {
         const price = Number(trade.p);
 
         if (symbol && Number.isFinite(price) && price > 0) {
-          routeTick(symbol, price);
+          // `trade.t` is Finnhub's own epoch-ms stamp for this print.
+          routeTick(symbol, price, Number(trade.t));
         }
       }
 
