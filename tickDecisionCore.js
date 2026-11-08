@@ -19,7 +19,7 @@
 //   3. TERMINAL: hard stop (systemStop) OR protective giveback OR price-trail breach
 //   4. protective high-water ratchet
 //   5. price-trail extreme ratchet
-//   6. partial profit-taking (C +$2,000 / D +$1,500 / E +$1,500, once, 50%)
+//   6. partial profit-taking (E +$1,500, once, 50% — A, B, C and D never sell partly)
 //   7. downside Vector 65 across newly crossed loss checkpoints (P&L < 0 only)
 //   8. upside Vector grid: activation at +$900, then ±$100 steps
 //   9. presses: 3R at +$800, 2R at +$700, 1R at the system's own threshold
@@ -42,8 +42,8 @@
 import {
   r2, orderCost, slippageCost, unrealized,
   PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, VECTOR_THRESHOLD, LOSS_LEVELS,
-  PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop,
-  protectivePolicy, partialProfitPolicy, isSystemHalted,
+  PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
+  protectivePolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
@@ -547,16 +547,51 @@ export function decideTick(args) {
     };
   }
 
-  // Rule 8 — presses. Precedence 3R, then 2R, then 1R.
+  // Rule 8 — presses. Precedence 3R, then 2R, then 1R. A single-press system
+  // (DART D) has no 2R and no 3R at all: its Press 1 is the whole ladder.
+  const plan = pressPlan(sys);
+  const single = plan?.single === true;
   const press1Level = press1Threshold(sys);
-  const wantPress3 = pl >= PRESS3 && !!pos.pressed_1r && !!pos.pressed_2r && !pos.pressed_3r;
-  const wantPress2 = pl >= PRESS2 && !!pos.pressed_1r && !pos.pressed_2r;
+  const wantPress3 = !single && pl >= PRESS3 && !!pos.pressed_1r && !!pos.pressed_2r && !pos.pressed_3r;
+  const wantPress2 = !single && pl >= PRESS2 && !!pos.pressed_1r && !pos.pressed_2r;
   const wantPress1 = pl >= press1Level && !pos.pressed_1r;
 
   if (wantPress3 || wantPress2 || wantPress1) {
     const isPress3 = wantPress3;
     const isPress2 = wantPress2;
-    const addShares = Math.floor(PRESS_SIZE_USD / price);
+
+    // THE PRESS SIZE. A fixed-size system presses PRESS_SIZE_USD. A dynamically sized
+    // one (DART D) presses what its caller measured against the day's buying power, so
+    // the figure must arrive with the tick: with no measurement the step is never
+    // guessed, and a known free balance under the floor is a SKIP, not a smaller press.
+    let pressSizeUsd = PRESS_SIZE_USD;
+    if (plan?.dynamicSize === true) {
+      const sized = Number(args?.pressSizeUsd);
+      if (!Number.isFinite(sized) || sized <= 0) {
+        const free = args?.pressBudgetFree == null ? null : Number(args.pressBudgetFree);
+        if (Number.isFinite(free)) {
+          return {
+            ...base,
+            action: "skipped",
+            reason: "press_budget_floor",
+            pl_raw: pl,
+            press_budget_free: r2(free),
+            min_free: D_MIN_FREE_USD,
+            prior_patches: priorPatches,
+          };
+        }
+        return {
+          ...base,
+          action: "needs_budget",
+          reason: "press_budget_unknown",
+          pl_raw: pl,
+          prior_patches: priorPatches,
+        };
+      }
+      pressSizeUsd = sized;
+    }
+
+    const addShares = Math.floor(pressSizeUsd / price);
     if (addShares <= 0) {
       return {
         ...base,
@@ -576,6 +611,9 @@ export function decideTick(args) {
     );
     const newPressed2 = isPress2 || isPress3;
     const pressLevel = isPress3 ? "3R" : isPress2 ? "2R" : "1R";
+    // The share-price trail starts at Press 2, or — on a single-press system — at its
+    // one and only press.
+    const activatesTrail = isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3);
     const pressEntry = {
       timestamp: nowIso,
       level: pressLevel,
@@ -589,6 +627,7 @@ export function decideTick(args) {
       event: isPress3 ? "press3" : isPress2 ? "press2" : "press1",
       pl_raw: pl,
       press_level: pressLevel,
+      press_size_usd: pressSizeUsd,
       shares_added: addShares,
       price_added: r2(price),
       shares_after: newShares,
@@ -607,7 +646,7 @@ export function decideTick(args) {
         current_pl: positionPl(pos, unrealized(side, price, newShares, newTcb)),
         peak_pl: positionPeak(pos, pl),
         commission_fees: commissionFees,
-        ...(isPress2
+        ...(activatesTrail
           ? { price_trail_active: true, price_trail_extreme: r2(price), price_trail_activated_time: nowIso }
           : {}),
       },

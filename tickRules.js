@@ -62,10 +62,12 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // ---------------------------------------------------------------------------
 // cloneSystems.ts — Press 1 is the ONE setting that differs per system.
 // ---------------------------------------------------------------------------
+// DART D was rebuilt as an exact copy of DART B on 2026-11-08 and presses ONCE, at
+// +$150 (see PRESS_PLAN below). Every other system keeps +$250.
 export const CLONE_PRESS1 = {
   B: 250,
   C: 250,
-  D: 250,
+  D: 150,
   E: 250,
   ANEW: 250,
 };
@@ -75,6 +77,57 @@ export function press1Threshold(system) {
   if (Number.isFinite(Number(v))) return Number(v);
   const c = CLONE_PRESS1.C;
   return Number.isFinite(Number(c)) ? Number(c) : 250;
+}
+
+// ---------------------------------------------------------------------------
+// cloneSystems.ts — pressPlan(). WHICH PRESSES a system takes, and whether the
+// share-price trail starts at the first one. A system with no row presses the shared
+// three times (+$700, +$800 after its own Press 1) at the fixed $40,000.
+//
+// DART D (2026-11-08) is the one exception: ONE press, at +$150, sized at the moment
+// it fires from D's own daily buying power, and the share-price trailing stop starts
+// at that press instead of at a Press 2 that no longer exists.
+// ---------------------------------------------------------------------------
+export const PRESS_PLAN = {
+  D: { single: true, dynamicSize: true, trailAtFirstPress: true },
+};
+
+export function pressPlan(system) {
+  return PRESS_PLAN[String(system ?? "").trim().toUpperCase()] || null;
+}
+
+// ---------------------------------------------------------------------------
+// dPressBudget.ts — D's buying power, and the size of its one press.
+//   buying power = 3 x D's account value, fixed each morning for the session,
+//   each press   = $120,000 or the buying power still free, whichever is smaller,
+//   below $20,000 free the press is SKIPPED (never scaled down further).
+// The buying power itself is read from Base44's daily DPressBudget row (the worker
+// caches it at sync); what is free is that figure less the cost basis of every open
+// D position in the book, so no per-tick read is needed.
+// ---------------------------------------------------------------------------
+export const D_BUYING_POWER_MULTIPLE = 3;
+export const D_MAX_PRESS_USD = 120000;
+export const D_MIN_FREE_USD = 20000;
+
+export function buyingPowerFor(equity) {
+  const e = Number(equity);
+  if (!Number.isFinite(e)) return 0;
+  return r2(Math.max(0, e) * D_BUYING_POWER_MULTIPLE);
+}
+
+// Buying power still free, or null when the day's figure is not known.
+export function freeBuyingPower(buyingPower, deployed) {
+  const bp = Number(buyingPower);
+  if (!Number.isFinite(bp)) return null;
+  return r2(Math.max(0, bp - (Number(deployed) || 0)));
+}
+
+// The size of one press given the buying power still free, or null when there is not
+// enough free to press at all (the press is skipped).
+export function dPressSizeFor(free) {
+  const f = Number(free);
+  if (!Number.isFinite(f) || f < D_MIN_FREE_USD) return null;
+  return Math.floor(Math.min(D_MAX_PRESS_USD, f));
 }
 
 // cloneSystems.ts — no system overrides the shared -$1,700 stop (DART A+ carried
@@ -87,11 +140,13 @@ export function systemStop(system) {
 }
 
 // cloneSystems.ts — partial profit-taking. A and B have NO row and therefore never
-// sell partially: one comparison, no-op. D and E keep their rows while halted.
+// sell partially: one comparison, no-op.
 // DART C's row was REMOVED on 2026-11-06 (before the open): C runs B's rules with no
-// partial sale at all. D and E keep their rows (both halted).
+// partial sale at all.
+// DART D's row was REMOVED on 2026-11-08 when D was rebuilt as an exact copy of B: D
+// never sells partially and holds every position to its own exits. E keeps its row
+// (+$1,500, 50%) because E is D's copy of 2026-10-30 and is halted.
 export const SYSTEM_PARTIAL_PROFIT = {
-  D: { threshold: 1500, fraction: 0.5 },
   E: { threshold: 1500, fraction: 0.5 },
 };
 
@@ -102,11 +157,13 @@ export const SYSTEM_PARTIAL_PROFIT = {
 //
 // The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
 // automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
-// position can still arm earlier on deterioration. A and B have the row (identical,
-// +$2,000); C, D and E have none and their single comparison is a no-op.
+// position can still arm earlier on deterioration. A, B and D have the row (identical,
+// +$2,000 — D carries B's whole rule set from 2026-11-08); C and E have none and their
+// single comparison is a no-op.
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
+  D: 2000,
 };
 
 export function autoArmPolicy(system) {
@@ -128,7 +185,7 @@ export function partialProfitPolicy(system) {
 // protectiveStop.ts — arm thresholds and the giveback.
 //   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B and DART C. C arms
 //              on the Vector test only; A and B (from 2026-11-09) also arm at +$2,000
-//   CD_RULE_SET stock 65 / market 85 — DART D and DART E (both halted)
+//   CD_RULE_SET stock 65 / market 85 — DART E (halted; D moved to B's set 2026-11-08)
 //   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
 // All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
 // protectivePolicy() does in Base44.
@@ -144,7 +201,10 @@ export const PROTECTIVE_BY_SYSTEM = {
   // 2026-11-09: C now runs B's ORIGINAL rule set exactly — the Vector test only —
   // and is the control B is measured against.
   C: B_RULE_SET,
-  D: CD_RULE_SET,
+  // DART D was rebuilt as an exact copy of DART B on 2026-11-08 and moved from its
+  // own 65/85 row to B's 55/65 set. D is halted.
+  D: B_RULE_SET,
+  // DART E is D's copy of 2026-10-30 and keeps its own 65/85 row. E is halted.
   E: CD_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
   // resolves to the same 55/65 rule set it always had — never to the fallback.
@@ -190,6 +250,11 @@ export const LOSS_LEVELS = [
 // ---------------------------------------------------------------------------
 // systemHalt.ts — D and E are halted (C reactivated 2026-11-01). A halted account
 // trades nothing: the engine returns a no-op decision and writes nothing.
+// D is wired onto the Render engine ahead of its activation (2026-11-08): its
+// switchboard row says engine render / mode live, and this halt outranks it, so the
+// engine decides every one of D's ticks and the verdict is "halted" — no press, no
+// exit, no write. Removing "D" here (shared/systemHalt.ts on the Base44 side) is the
+// one change that turns the account on.
 // ---------------------------------------------------------------------------
 export const HALTED_SYSTEMS = ["D", "E"];
 

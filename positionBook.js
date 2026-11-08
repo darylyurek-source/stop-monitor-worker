@@ -23,6 +23,10 @@ export const TABLE_FOR_SYSTEM = {
   ANEW: "positions_anew",
   B: "positions_b",
   C: "positions_c",
+  // DART D: $250,000 paper account, rebuilt as an exact copy of B on 2026-11-08 and
+  // wired onto this engine ahead of its activation. The account is still HALTED —
+  // its ticks are decided (verdict "halted") and nothing is written.
+  D: "positions_d",
 };
 
 const books = new Map(); // system -> Map(id -> position)
@@ -55,6 +59,17 @@ export function ids(system) {
 
 export function size(system) {
   return bookOf(system).size;
+}
+
+// The cost basis of every open position in a system, straight from the book — what a
+// system's buying power has committed. DART D's press is sized against the free
+// balance, so this is read on the tick path and must never cost a query.
+export function sumTcb(system) {
+  let total = 0;
+  for (const pos of bookOf(system).values()) {
+    if (pos && String(pos.status) === "open") total += Number(pos.tcb) || 0;
+  }
+  return Math.round((total + Number.EPSILON) * 100) / 100;
 }
 
 // Replace a system's book with the database's open positions. Called at startup

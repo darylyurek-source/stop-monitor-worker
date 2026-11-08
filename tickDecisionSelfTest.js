@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -51,7 +51,8 @@ function check(name, actual, expected) {
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C")], [250, 250, 250]);
 check("hard stop per system", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -1700]);
 check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 55, 65, 350]);
-check("partial profit only D/E (C's half sale removed 2026-11-06)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D").threshold, partialProfitPolicy("E").threshold], [null, null, null, 1500, 1500]);
+check("D runs B's 55/65 rule set and D's press is +$150", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 150, true]);
+check("partial profit only E (C 2026-11-06, D 2026-11-08, A and B never)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E").threshold], [null, null, null, null, 1500]);
 
 // --- 1. HARD STOP (A) ---------------------------------------------------------
 // long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
@@ -65,14 +66,21 @@ const t2 = tick("B", pos(), 101.25);
 check("press 1 at +$250", [t2.action, t2.event, t2.pl_raw], ["press", "press1", 250]);
 check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after, t2.commission_fees], [395, 59993.75, 595, 5.46]);
 
-// --- 3. PARTIAL PROFIT (D at +$1,500) ----------------------------------------
-// long 200 sh at 107.50 -> P&L $1,500: sells 100 sh, banks $750 gross.
-// D is halted in production, so the rule is driven with halted:false — the
-// arithmetic must be right the moment the registry is changed back.
-const t3 = tick("D", pos(), 107.5, { halted: false });
-check("D sells half at +$1,500", [t3.action, t3.event, t3.pl_raw], ["partial", "partial_profit_exit", 1500]);
-check("partial arithmetic", [t3.sold_shares, t3.remaining_shares, t3.gross_pl, t3.net_pl], [100, 100, 750, 748.23]);
-check("partial patch", [t3.patch.shares, t3.patch.tcb, t3.patch.partial_profit_taken], [100, 10000, true]);
+// --- 3. DART D's ONE PRESS (at +$150, sized by its daily buying power) --------
+// D is halted in production, so the press is driven with halted:false — the
+// arithmetic must be right the moment D is turned on. 200 sh at 101.00 -> P&L $200,
+// sized $10,100 at that price -> 100 shares. Fees: commission 0.35 + clearing 0.02
+// + slippage 1.01.
+const t3 = tick("D", pos(), 101, { halted: false, pressSizeUsd: 10100 });
+check("D presses once at +$150", [t3.action, t3.event, t3.pl_raw, t3.press_size_usd, t3.press_level], ["press", "press1", 200, 10100, "1R"]);
+check("D press arithmetic", [t3.shares_added, t3.shares_after, t3.patch.tcb, t3.commission_fees], [100, 300, 30100, 1.38]);
+check("D's trail starts at its one press", [t3.patch.price_trail_active, t3.patch.price_trail_extreme, t3.patch.pressed_2r, t3.patch.pressed_3r], [true, 101, false, false]);
+// No second rung exists: above +$700 and +$800 a pressed D still only holds.
+const t3b = tick("D", pos({ pressed_1r: true, shares: 300, tcb: 30100, price_trail_active: true, price_trail_extreme: 101 }), 103, { halted: false, pressSizeUsd: 10100 });
+check("D never presses twice", [t3b.action, t3b.event], ["hold", "hold"]);
+// An unmeasured press is never guessed, and less than $20,000 free is a skip.
+check("D without today's budget does not press", tick("D", pos(), 101, { halted: false }).action, "needs_budget");
+check("D under the $20,000 floor skips", tick("D", pos(), 101, { halted: false, pressBudgetFree: 15000 }).reason, "press_budget_floor");
 
 // --- 4. NO PARTIAL FOR A (ANEW) — the +$900 grid takes it instead ------------
 const t4 = tick("ANEW", pos(), 110, { vectorScore: 30 });
@@ -160,13 +168,12 @@ check("the engine's score is the Vector module's own", t16.vector_score, compute
 const t17 = decideTick({ system: "B", position: pos(), price: 99.4, nowIso: NOW, liveZeroFallback: true });
 check("live zero fallback decides instead of deferring", [t17.action, t17.event, t17.vector_source], ["hold", "vector_checkpoint_hold", "live_zero_fallback"]);
 
-// --- 18. THE +$2,000 AUTO-ARM (moved from C to B on 2026-11-07, live 2026-11-09) --
+// --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
 check("B arms its $350 stop at +$2,000", autoArmPolicy("B"), 2000);
-check("A arms its $350 stop at the same +$2,000", autoArmPolicy("ANEW"), 2000);
 check("C is the control — no automatic arming", autoArmPolicy("C"), null);
-check("C, D and E do not auto-arm", [autoArmPolicy("C"), autoArmPolicy("D"), autoArmPolicy("E")], [null, null, null]);
+check("D carries B's auto-arm, E does not", [autoArmPolicy("ANEW"), autoArmPolicy("D"), autoArmPolicy("E")], [2000, 2000, null]);
 // C's Vector test must stay B's original 55/65, and B's own must be untouched.
 check(
   "B and C arm the Vector test identically",

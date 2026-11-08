@@ -23,6 +23,7 @@ import { assessProtectiveTrigger } from "./protectiveTrigger.js";
 import { autoArmPolicy } from "./tickRules.js";
 import { applyTick, bars as candleBars, isSeeded, seed } from "./candleService.js";
 import { get as getPosition } from "./positionBook.js";
+import { pressSizing } from "./dBudget.js";
 import { bulkUpsertEntities, bridgeConfigured } from "./bridge.js";
 
 const FLUSH_MS = 5000;
@@ -122,6 +123,12 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
     if (arming && arming.action === "activate") effective = { ...pos, ...arming.patch };
   }
 
+  // DART D's press size, measured against the day's buying power and the open book.
+  // null for every other system, and null for D when no budget for today is known —
+  // in which case the engine answers "needs_budget" rather than pressing an unknown
+  // amount.
+  const sizing = pressSizing(ref.system, nowMs);
+
   const started = process.hrtime.bigint();
   let verdict = null;
   try {
@@ -131,6 +138,8 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
       price,
       nowIso,
       candles: series && series.length ? series : undefined,
+      pressSizeUsd: sizing ? sizing.pressSizeUsd : undefined,
+      pressBudgetFree: sizing ? sizing.free : undefined,
     });
   } catch (err) {
     state.errors += 1;

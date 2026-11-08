@@ -10,8 +10,12 @@
 // The same symbol can be open in A, B and C at the same time; each tick for that
 // symbol is forwarded independently to each system's handler, through that
 // position's own mailbox. No duplicate quote requests — each unique symbol is
-// subscribed once. D and E are halted: they are never served, so no tick of
-// theirs can ever be forwarded.
+// subscribed once.
+//
+// DART D is wired onto this engine ahead of its activation (2026-11-08): its positions
+// are served like the others, its switchboard row says render / live, and it is still
+// HALTED — so each of its ticks is decided and the verdict is "halted", which writes
+// nothing. DART E is halted and served to nobody.
 //
 // Handler contract (identical for dartLiveA / dartLiveB / dartLiveC):
 //   POST {BASE44_APP_URL}/functions/{handler}
@@ -39,6 +43,7 @@ import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
 import * as engineLive from "./engineLive.js";
 import * as positionBook from "./positionBook.js";
+import * as dBudget from "./dBudget.js";
 import { applyTick as recordBar, configure as configureCandles } from "./candleService.js";
 import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
@@ -309,6 +314,10 @@ async function fetchOpenPositions() {
   const body = await res.json();
   // The app decides whether the market is open; this flag only sets the cadence.
   marketClosed = body?.market_closed === true;
+  // DART D's buying power for today travels on this same response, so sizing its press
+  // costs no extra request. A payload without it (closed market, or the day's row not
+  // yet fixed) clears the cached figure rather than leaving a stale one in place.
+  dBudget.setFromMonitoring(body);
   if (Array.isArray(body.positions)) return body.positions;
   if (Array.isArray(body)) return body;
   if (Array.isArray(body.items)) return body.items;
@@ -323,7 +332,7 @@ async function syncWithBase44() {
     // Build the new symbol -> positions map from the response.
     const next = new Map();
     const seenSymbols = new Set();
-    let countA = 0, countB = 0, countC = 0;
+    let countA = 0, countB = 0, countC = 0, countD = 0;
 
     for (const it of items) {
       const symbol = String(it.symbol || "").toUpperCase();
@@ -338,6 +347,7 @@ async function syncWithBase44() {
       if (system === "ANEW") countA++;
       else if (system === "B") countB++;
       else if (system === "C") countC++;
+      else if (system === "D") countD++;
 
       if (!next.has(symbol)) next.set(symbol, []);
       next.get(symbol).push({ positionId, handler, system });
@@ -392,7 +402,7 @@ async function syncWithBase44() {
 
     console.log(
       `[sync] ${symbolPositions.size} symbol(s), ${items.length} position(s) ` +
-      `[A=${countA} B=${countB} C=${countC}] market=${marketClosed ? "closed" : "open"}` +
+      `[A=${countA} B=${countB} C=${countC} D=${countD}] market=${marketClosed ? "closed" : "open"}` +
       (symbolPositions.size ? ": " + Array.from(symbolPositions.keys()).join(", ") : "")
     );
 
@@ -536,7 +546,13 @@ async function forwardTick(ref, symbol, price) {
         (verdict.pl_raw != null ? ` pl=${fmt(verdict.pl_raw)}` : "") +
         (verdict.exit_price != null ? ` @${fmt(verdict.exit_price)}` : "")
       );
-    } else if (result && result.reason !== "hold" && result.reason !== "hold_state" && result.reason !== "not_owner") {
+    } else if (
+      result &&
+      result.reason !== "hold" &&
+      result.reason !== "hold_state" &&
+      result.reason !== "halted" &&   // DART D until it is turned on: decided, never written
+      result.reason !== "not_owner"
+    ) {
       console.error(`[live] ${ref.system} ${symbol}: ${verdict.action} not written (${result.reason})`);
     }
     return;
