@@ -156,13 +156,17 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Partial sale: C takes half at +$2,000 and only once.
-  check("partial: C's policy", partialProfitPolicy("C"), { threshold: 2000, fraction: 0.5 });
+  // Partial sale: only D and E carry the rule now (both $1,500, half). DART C lost its
+  // +$2,000 row on 2026-11-06 and B never had one (live: cloneSystems.ts
+  // SYSTEM_PARTIAL_PROFIT). D is halted, so the shared arithmetic is exercised with the
+  // halt guard lifted — the rule block is what is under test here.
+  check("partial: C has none", partialProfitPolicy("C"), null);
   check("partial: B has none", partialProfitPolicy("B"), null);
-  const part = decideTick({ system: "C", position: pos({}), price: 50 + 2100 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("partial: D takes half at +$1,500", partialProfitPolicy("D"), { threshold: 1500, fraction: 0.5 });
+  const part = decideTick({ system: "D", halted: false, position: pos({}), price: 50 + 1600 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: half the shares are sold", part.action, "partial");
   check("partial: 400 → 200", part.remaining_shares, 200);
-  const twice = decideTick({ system: "C", position: pos({ partial_profit_taken: true, shares: 200, tcb: 10000 }), price: 50 + 2100 / 200, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  const twice = decideTick({ system: "D", halted: false, position: pos({ partial_profit_taken: true, shares: 200, tcb: 10000 }), price: 50 + 1600 / 200, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: never fires twice", twice.action !== "partial", true);
 }
 
