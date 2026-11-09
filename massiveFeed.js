@@ -504,7 +504,10 @@ function publish(symbol, price, exchangeMs) {
 
   if (mode === "live") {
     try {
-      if (onPrice) onPrice(symbol, price);
+      // The venue's own stamp travels WITH the price: the consumer is what decides
+      // whether a print describes the present (worker.js onMassivePrice). Dropping it
+      // here is what made a replayed pre-open frame look like a live price.
+      if (onPrice) onPrice(symbol, price, exchangeMs);
     } catch (err) {
       console.error(`[massive] route failed for ${symbol}: ${String(err?.message || err).slice(0, 120)}`);
     }

@@ -246,6 +246,25 @@ const lastPrice = new Map();
 const FALLBACK_MAX_QUOTE_AGE_MS = 60000;
 const FALLBACK_MAX_DEVIATION = 0.03;
 
+// A STREAM print carries the venue's own stamp, and that stamp is the only proof the
+// print describes the present. Measured transit is tens of milliseconds, so this is a
+// wide margin against clock skew and still far tighter than the 60 s the quote paths use.
+const STREAM_MAX_PRINT_AGE_MS = 10000;
+
+// symbol -> how many stream prints were refused, so a replay burst cannot flood the log.
+const streamRejected = new Map();
+
+function rejectStreamPrint(symbol, price, reason) {
+  const seen = (streamRejected.get(symbol) || 0) + 1;
+  streamRejected.set(symbol, seen);
+  if (seen <= 3 || seen % 100 === 0) {
+    console.warn(
+      `[stream] ${symbol} print ${price} REJECTED — ${reason}` +
+      (seen > 3 ? ` (${seen} refused on this symbol)` : "")
+    );
+  }
+}
+
 // positionId -> one-slot mailbox carrying that position's next price.
 //
 //   { inFlight: boolean, pending: { ref, symbol, price } | null }
@@ -726,9 +745,56 @@ function standbySubscriptions() {
   return symbols;
 }
 
-// One Massive price (a stream trade or a REST snapshot): route it, and release any
-// Finnhub takeover the symbol was on.
-function onMassivePrice(symbol, price) {
+// One Massive STREAM print. The venue's stamp travels with it, and it is the only proof
+// the print describes the present — so it is required.
+//
+// GUARD (2026-11-09). This was the ONE price path with no test of any kind: the snapshot
+// fallback and the Finnhub standby each enforced 60 s of age and a 3% bound, while a
+// stream print went straight to the book. On 2026-11-09 pre-open prints (the last trade
+// before 09:30 — BL 25.89, SDGR 29.82, VSAT 63.72 …) arrived as live prices at 14:51 ET
+// and closed eleven positions at values the market never traded that afternoon. A print
+// older than STREAM_MAX_PRINT_AGE_MS, or further than FALLBACK_MAX_DEVIATION from the
+// last price this worker accepted, is not a price: it is dropped and the next print
+// decides. A real breach is unaffected — reaching a stop here takes a 1.2%-2.8% move,
+// well inside the band, so the first live print still fires it exactly as before.
+function onMassivePrice(symbol, price, exchangeMs) {
+  const stamp = Number(exchangeMs);
+  if (!Number.isFinite(stamp) || stamp <= 0) {
+    rejectStreamPrint(symbol, price, "no venue timestamp on the print");
+    return;
+  }
+  const ageMs = Date.now() - stamp;
+  if (ageMs < 0) {
+    rejectStreamPrint(symbol, price, `stamped ${Math.round(-ageMs / 1000)}s in the future`);
+    return;
+  }
+  if (ageMs > STREAM_MAX_PRINT_AGE_MS) {
+    rejectStreamPrint(
+      symbol, price,
+      `print is ${(ageMs / 1000).toFixed(1)}s old (limit ${STREAM_MAX_PRINT_AGE_MS / 1000}s)`
+    );
+    return;
+  }
+  const previous = lastPrice.get(symbol);
+  if (previous) {
+    const deviation = Math.abs(price - previous) / previous;
+    if (deviation > FALLBACK_MAX_DEVIATION) {
+      rejectStreamPrint(
+        symbol, price,
+        `${(deviation * 100).toFixed(2)}% away from the last price ${previous} ` +
+        `(limit ${(FALLBACK_MAX_DEVIATION * 100).toFixed(0)}%)`
+      );
+      return;
+    }
+  }
+  adoptMassivePrice(symbol, price, stamp);
+}
+
+// A Massive price that has ALREADY been validated — by the stream guard above, or by the
+// snapshot fallback's own age and deviation checks. Books it as current (ending any
+// Finnhub takeover) and routes it exactly as before. Kept separate so the new stamp rule
+// cannot reject the one path that was already safe.
+function adoptMassivePrice(symbol, price, exchangeMs = null) {
   const ended = standby.noteMassive(symbol, price);
   if (ended) {
     console.log(
@@ -737,7 +803,7 @@ function onMassivePrice(symbol, price) {
       `${new Date(ended.startedAt).toISOString()} (${ended.prints} print${ended.prints === 1 ? "" : "s"})`
     );
   }
-  routeTick(symbol, price, null, "massive");
+  routeTick(symbol, price, exchangeMs, "massive");
 }
 
 // May this Finnhub print route its symbol? Only when Massive is stale for it, the print
@@ -1000,7 +1066,8 @@ async function pollQuietSymbols() {
           );
           continue;
         }
-        if (massivePrimary) onMassivePrice(symbol, price);
+        // Already checked above: 60 s of trade age and 3% from the book.
+        if (massivePrimary) adoptMassivePrice(symbol, price);
         else routeTick(symbol, price);
       }
     } catch (err) {
