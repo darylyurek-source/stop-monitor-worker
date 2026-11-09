@@ -125,8 +125,8 @@ const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb
 check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 392, 792, 5.45]);
 
 // --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
-// D and E are the halted accounts (C was reactivated 2026-11-01).
-const t12 = tick("D", pos(), 91.5);
+// E is the halted account (D was reactivated 2026-11-09; C was reactivated 2026-11-01).
+const t12 = tick("E", pos(), 91.5);
 check("halted account decides nothing", [t12.action, t12.halted, t12.patch], ["halted", true, undefined]);
 check("halted account would otherwise stop out at this price", tick("B", pos(), 91.5).action, "exit");
 
