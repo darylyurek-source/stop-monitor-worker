@@ -48,6 +48,11 @@ import { applyTick as recordBar, configure as configureCandles } from "./candleS
 import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
 import * as standby from "./feedStandby.js";
+import * as tradeConditions from "./tradeConditions.js";
+import { runSessionClose, CLOSE_SWEEP_INTERVAL_MS } from "./closeSweep.js";
+import { makeClosePriceResolver, finnhubQuote as quoteFromFinnhub, CLOSE_MAX_PRICE_AGE_MS } from "./closeQuote.js";
+import { verifyDatabase } from "./dbVerify.js";
+import { noteLargeMove, summary as largeMovesSummary, forget as forgetLargeMoves } from "./largeMoves.js";
 import { HALTED_SYSTEMS, isSystemHalted } from "./tickRules.js";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
@@ -238,13 +243,19 @@ const symbolPositions = new Map();
 // symbol -> ms of last price seen (WS tick or REST quote)
 const lastTick = new Map();
 
-// symbol -> the last price routeTick accepted. The REST fallback is bounded against
-// this so one bad quote cannot reprice the book.
+// symbol -> the last price routeTick accepted. Handed to largeMoves.js to REPORT a large move;
+// never a reason to refuse one.
 const lastPrice = new Map();
 
-// A fallback quote may not describe an older session, and may not jump the book.
+// A fallback quote may not describe an older session. AGE ONLY — see LARGE_MOVE_DEVIATION.
 const FALLBACK_MAX_QUOTE_AGE_MS = 60000;
-const FALLBACK_MAX_DEVIATION = 0.03;
+
+// LARGE MOVES ARE REPORTED, NEVER REFUSED (2026-11-09). A percentage band cannot tell a bad
+// price from a good one — a halt resume, an opening gap and a news spike are genuine prints —
+// and because the reference price only advanced on an ACCEPTED print, one rejection refused
+// every later price too: no stop, no trail, no 16:00 close for that symbol. Magnitude is now
+// diagnostic only, and it lives in largeMoves.js, whose every line describes a price that WAS
+// used. Notice it is never asked here whether to accept anything.
 
 // A STREAM print carries the venue's own stamp, and that stamp is the only proof the
 // print describes the present. Measured transit is tens of milliseconds, so this is a
@@ -264,6 +275,7 @@ function rejectStreamPrint(symbol, price, reason) {
     );
   }
 }
+
 
 // positionId -> one-slot mailbox carrying that position's next price.
 //
@@ -377,6 +389,11 @@ async function syncWithBase44() {
     const prevSymbols = new Set(symbolPositions.keys());
     for (const symbol of seenSymbols) {
       if (!prevSymbols.has(symbol)) {
+        // A symbol that was not open a moment ago starts with no reference price, so its
+        // first print establishes the book instead of being judged against a price left
+        // over from an earlier session (which an overnight gap would otherwise lock out).
+        lastPrice.delete(symbol);
+        forgetLargeMoves(symbol);
         wsSend({ type: "subscribe", symbol });
         console.log(`[sync] + ${symbol}`);
       }
@@ -702,6 +719,8 @@ async function pumpMailbox(m, first) {
 // nothing but the standby bookkeeping — the same price takes the same path through
 // every rule either way.
 function routeTick(symbol, price, exchangeMs, source = "finnhub") {
+  // Report a large move before the anchor moves, so the line carries both prices.
+  noteLargeMove(symbol, price, source);
   lastTick.set(symbol, Date.now());
   lastPrice.set(symbol, price);
   // EVERY tick feeds the worker's own 1-minute series, whether or not a position is
@@ -748,52 +767,52 @@ function standbySubscriptions() {
 // One Massive STREAM print. The venue's stamp travels with it, and it is the only proof
 // the print describes the present — so it is required.
 //
-// GUARD (2026-11-09). This was the ONE price path with no test of any kind: the snapshot
-// fallback and the Finnhub standby each enforced 60 s of age and a 3% bound, while a
-// stream print went straight to the book. On 2026-11-09 pre-open prints (the last trade
-// before 09:30 — BL 25.89, SDGR 29.82, VSAT 63.72 …) arrived as live prices at 14:51 ET
-// and closed eleven positions at values the market never traded that afternoon. A print
-// older than STREAM_MAX_PRINT_AGE_MS, or further than FALLBACK_MAX_DEVIATION from the
-// last price this worker accepted, is not a price: it is dropped and the next print
-// decides. A real breach is unaffected — reaching a stop here takes a 1.2%-2.8% move,
-// well inside the band, so the first live print still fires it exactly as before.
-function onMassivePrice(symbol, price, exchangeMs) {
-  const stamp = Number(exchangeMs);
-  if (!Number.isFinite(stamp) || stamp <= 0) {
-    rejectStreamPrint(symbol, price, "no venue timestamp on the print");
+// GUARD (cut 2026-11-09, re-cut the same evening). Two questions, in this order:
+//
+//   1. WHAT IS THIS PRINT? tradeConditions.js answers from the frame's own fields: the
+//      sale conditions the SIP stamped on it, and the gap between when it executed (pt)
+//      and when it was taped (t). This is the decisive test, and it is the one the 14:51
+//      flush fails — every print that closed a position carried condition 13, "Extended
+//      Hours (Sold Out Of Sequence)", for a trade executed 11-15 hours earlier.
+//
+//   2. HOW OLD IS IT? A print older than STREAM_MAX_PRINT_AGE_MS describes a finished tape
+//      and is not a price.
+//
+// HOW FAR THE PRICE MOVED IS NOT A QUESTION HERE ANY MORE (2026-11-09). Magnitude decided
+// nothing until it had already caused the damage it was meant to prevent: because the
+// reference price only advanced on an ACCEPTED print, one rejected print refused every
+// later one too. Size is now reported by noteLargeMove and never refused. Anything refused
+// above is dropped without touching the book, and the next print decides.
+function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
+  // 1. Eligibility, from what the tape says this print is.
+  const eligibility = tradeConditions.assess({
+    conditions: meta.conditions,
+    participantMs: meta.participantMs,
+    tapeMs: exchangeMs,
+  });
+  if (!eligibility.eligible) {
+    rejectStreamPrint(symbol, price, eligibility.reason);
     return;
   }
-  const ageMs = Date.now() - stamp;
-  if (ageMs < 0) {
-    rejectStreamPrint(symbol, price, `stamped ${Math.round(-ageMs / 1000)}s in the future`);
+
+  // 2. The print must describe the present. FRESHNESS IS AGE ONLY — it takes no price, so a
+  //    halt resume 20 % away, an opening gap or a news spike is a price whatever its size.
+  const freshness = tradeConditions.assessFreshness({
+    stampMs: exchangeMs,
+    maxAgeMs: STREAM_MAX_PRINT_AGE_MS,
+  });
+  if (!freshness.ok) {
+    rejectStreamPrint(symbol, price, `print ${freshness.reason}`);
     return;
   }
-  if (ageMs > STREAM_MAX_PRINT_AGE_MS) {
-    rejectStreamPrint(
-      symbol, price,
-      `print is ${(ageMs / 1000).toFixed(1)}s old (limit ${STREAM_MAX_PRINT_AGE_MS / 1000}s)`
-    );
-    return;
-  }
-  const previous = lastPrice.get(symbol);
-  if (previous) {
-    const deviation = Math.abs(price - previous) / previous;
-    if (deviation > FALLBACK_MAX_DEVIATION) {
-      rejectStreamPrint(
-        symbol, price,
-        `${(deviation * 100).toFixed(2)}% away from the last price ${previous} ` +
-        `(limit ${(FALLBACK_MAX_DEVIATION * 100).toFixed(0)}%)`
-      );
-      return;
-    }
-  }
-  adoptMassivePrice(symbol, price, stamp);
+
+  adoptMassivePrice(symbol, price, Number(exchangeMs));
 }
 
 // A Massive price that has ALREADY been validated — by the stream guard above, or by the
-// snapshot fallback's own age and deviation checks. Books it as current (ending any
-// Finnhub takeover) and routes it exactly as before. Kept separate so the new stamp rule
-// cannot reject the one path that was already safe.
+// snapshot fallback's own age check. Books it as current (ending any Finnhub takeover) and
+// routes it exactly as before. Kept separate so the stamp rule cannot reject the one path
+// that was already safe. No magnitude test exists on either side.
 function adoptMassivePrice(symbol, price, exchangeMs = null) {
   const ended = standby.noteMassive(symbol, price);
   if (ended) {
@@ -811,13 +830,7 @@ function adoptMassivePrice(symbol, price, exchangeMs = null) {
 function standbyAdmits(symbol, price, exchangeMs) {
   const verdict = standby.admitFinnhub(symbol, price, { exchangeMs });
   if (!verdict.use) {
-    if (verdict.reason === "deviation") {
-      console.warn(
-        `[standby] ${symbol} Finnhub print ${price} REJECTED — ` +
-        `${(verdict.deviation * 100).toFixed(2)}% away from the last accepted price ${verdict.previous}` +
-        ` (limit ${(standby.MAX_DEVIATION * 100).toFixed(0)}%)`
-      );
-    } else if (verdict.reason !== "massive_current") {
+    if (verdict.reason !== "massive_current") {
       console.warn(
         `[standby] ${symbol} Finnhub print ${price} REJECTED — ${verdict.reason}` +
         (verdict.printAgeMs ? ` (${Math.round(verdict.printAgeMs / 1000)}s old)` : "")
@@ -1013,7 +1026,7 @@ async function pollQuietSymbols() {
       // In Massive mode the fallback is Massive's own snapshot, which has no
       // per-minute ceiling; every other mode keeps Finnhub's quote exactly as before.
       // If Massive cannot answer at all, Finnhub's quote is the standby's last resort and
-      // goes through the same standby gate (15 s silence, 60 s print age, 3% deviation).
+      // goes through the same standby gate (15 s silence, 60 s print age, no magnitude).
       const massivePrimary = PRICE_FEED === "massive";
       let price = null;
       let exchangeMs = null;
@@ -1029,16 +1042,18 @@ async function pollQuietSymbols() {
         if (!res.ok) continue;
 
         const q = await res.json();
-        // q.t is when the quote was last updated (epoch seconds). A quote older than
-        // the limit describes a finished session — its `c` is that session's close,
-        // and routing it would value an open position off a dead tape.
+        // q.t is when the quote was last updated (epoch seconds). A quote older than the
+        // limit describes a finished session — its `c` is that session's close, and routing
+        // it would value an open position off a dead tape. AGE ONLY, never magnitude.
         const quoteTs = numberOrNull(q && q.t);
-        const ageMs = quoteTs ? Date.now() - quoteTs * 1000 : null;
-        if (ageMs == null || ageMs > FALLBACK_MAX_QUOTE_AGE_MS) {
+        const quoteFresh = tradeConditions.assessFreshness({
+          stampMs: quoteTs ? quoteTs * 1000 : null,
+          maxAgeMs: FALLBACK_MAX_QUOTE_AGE_MS,
+        });
+        if (!quoteFresh.ok) {
           console.warn(
-            `[quote] ${symbol} REJECTED — ` +
-            (ageMs == null ? "quote carries no timestamp" : `quote is ${Math.round(ageMs / 1000)}s old`) +
-            ` (limit ${FALLBACK_MAX_QUOTE_AGE_MS / 1000}s)`
+            `[quote] ${symbol} REJECTED — quote ${quoteFresh.reason} ` +
+            `(limit ${FALLBACK_MAX_QUOTE_AGE_MS / 1000}s)`
           );
           continue;
         }
@@ -1055,18 +1070,10 @@ async function pollQuietSymbols() {
       }
 
       if (price && price > 0) {
-        // Bound the fallback against the last price actually accepted for this
-        // symbol: a print that far from the book is a bad quote, not a move.
-        const previous = lastPrice.get(symbol);
-        const deviation = previous ? Math.abs(price - previous) / previous : 0;
-        if (previous && deviation > FALLBACK_MAX_DEVIATION) {
-          console.warn(
-            `[quote] ${symbol} REJECTED — ${price} is ${(deviation * 100).toFixed(2)}% ` +
-            `away from the last price ${previous} (limit ${(FALLBACK_MAX_DEVIATION * 100).toFixed(0)}%)`
-          );
-          continue;
-        }
-        // Already checked above: 60 s of trade age and 3% from the book.
+        // NO MAGNITUDE TEST. This path exists to recover a symbol whose stream went quiet,
+        // and a quiet symbol is often one that halted and resumed somewhere else entirely —
+        // a band here would refuse the very resume it was built to carry. Age was checked
+        // above; any large move is reported by noteLargeMove, never refused.
         if (massivePrimary) adoptMassivePrice(symbol, price);
         else routeTick(symbol, price);
       }
@@ -1078,70 +1085,25 @@ async function pollQuietSymbols() {
 
 
 // ------------------------------------------------------------
-// STARTUP DATABASE VERIFICATION (READ-ONLY)
+// THE PRICE THE CLOSE IS EXECUTED AT
 //
-// Proves this service reaches the same Cloud SQL database Base44 trades on.
-// It calls ONLY two whitelisted bridge operations - `ping_timed` and
-// `countAllPositionsInTable` - so it cannot create, update or delete a record,
-// and it takes no part in tick routing or in any trading rule. C, D and E stay
-// halted: nothing here opens, manages or closes a position.
-//
-// The bridge accepts no arbitrary SQL by design, so it exposes no operation
-// that returns the database NAME. Identity is therefore proven by fingerprint:
-// the live database must answer with these tables and these row counts.
+// The sweep must close at a price that describes the market as of the close. The router keeps
+// the last accepted price AND when it was accepted, so the close can judge its age instead of
+// trusting it: a symbol that stopped printing an hour ago has an hour-old price.
 // ------------------------------------------------------------
 
-const VERIFY_TABLES = ["positions_anew", "positions_b", "positions_c", "positions_d", "positions_e"];
+// Built from the router's own maps so the close can judge a price's AGE rather than trusting
+// it. The policy (ask the market first, label and count a stale fallback) is in closeQuote.js.
+const closePriceResolver = makeClosePriceResolver({
+  lastPrice,
+  lastTick,
+  fetchSnapshot: (symbol) => (PRICE_FEED === "massive" ? massiveFeed.snapshotPrice(symbol) : null),
+  fetchQuote: (symbol) => quoteFromFinnhub(symbol, FINNHUB_API_KEY),
+});
 
-async function bridgeRead(operation, params = {}) {
-  const t0 = Date.now();
-  const res = await fetch(`${BRIDGE_URL}/db`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${BRIDGE_API_KEY}` },
-    body: JSON.stringify({ operation, params }),
-    signal: AbortSignal.timeout(10000),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.ok === false) {
-    throw new Error(`${operation}: HTTP ${res.status} ${body.error || "no error detail"}`);
-  }
-  return { result: body.result, ms: Date.now() - t0 };
-}
-
-async function verifyDatabase() {
-  if (!BRIDGE_URL || !BRIDGE_API_KEY) {
-    console.log(
-      "[db] verification skipped - BRIDGE_URL / BRIDGE_API_KEY are not set on this service (tick routing unaffected)"
-    );
-    return;
-  }
-  try {
-    const health = await fetch(`${BRIDGE_URL}/health`, { signal: AbortSignal.timeout(10000) })
-      .then((r) => r.json())
-      .catch(() => null);
-    console.log(
-      `[db] bridge ${BRIDGE_URL.replace(/^https?:\/\//, "")} health=${health && health.ok ? "ok" : "unavailable"}`
-    );
-
-    const ping = await bridgeRead("ping_timed");
-    const p = ping.result || {};
-    console.log(
-      `[db] ping ok - round trip ${ping.ms} ms, Cloud SQL ${p.elapsed_ms} ms, server time ${p.server_time}`
-    );
-
-    const counts = [];
-    for (const table of VERIFY_TABLES) {
-      const c = await bridgeRead("countAllPositionsInTable", { table });
-      counts.push(`${table}=${c.result}`);
-    }
-    console.log(`[db] rows  ${counts.join("  ")}`);
-    console.log(
-      "[db] verdict: reached the live Cloud SQL database - same instance and tables Base44 trades on (read-only, nothing written)"
-    );
-  } catch (err) {
-    console.error(`[db] verification FAILED - ${err.message}`);
-  }
-}
+// ------------------------------------------------------------
+// STARTUP DATABASE VERIFICATION (READ-ONLY) — moved to dbVerify.js (2026-11-09).
+// The same two whitelisted bridge reads, the same log lines, no trading effect.
 
 
 // ------------------------------------------------------------
@@ -1182,7 +1144,7 @@ async function start() {
 
   // Read-only database identity check. Deliberately NOT awaited: it must never
   // delay the first tick or the position sync, and it can never throw.
-  verifyDatabase();
+  verifyDatabase({ bridgeUrl: BRIDGE_URL, bridgeKey: BRIDGE_API_KEY });
 
   // Price feed. Massive is prepared in every mode; in shadow it only compares.
   massiveFeed.configure(MASSIVE_API_KEY);
@@ -1200,7 +1162,7 @@ async function start() {
     console.log(
       "[feed] Finnhub standby: armed — one standby socket with every open symbol subscribed; " +
       `a symbol only takes Finnhub prices after ${standby.STALE_AFTER_MS / 1000}s without a Massive print ` +
-      `(${standby.MAX_PRINT_AGE_MS / 1000}s print age and ${(standby.MAX_DEVIATION * 100).toFixed(0)}% deviation guards), ` +
+      `(${standby.MAX_PRINT_AGE_MS / 1000}s print age, no magnitude filter), ` +
       "and hands back on Massive's next print; every takeover is logged"
     );
   }
@@ -1225,8 +1187,37 @@ async function start() {
   // Catch events on quiet symbols.
   setInterval(pollQuietSymbols, POLL_LOOP_MS);
 
-  // How often the standby had to cover for Massive, in one line every five minutes.
+  // THE SESSION END DOES NOT WAIT FOR A TRADE (2026-11-09). Every exit — the 16:00 close
+  // included — is decided inside decideTick, which runs only when a price arrives, and for a
+  // Render-owned account nothing else may write. A symbol that stops printing therefore has
+  // no closing procedure at all, so this sweep closes any position its session has ended for
+  // at the last price this process holds, through the same guarded write a tick uses.
+  // Printed once at startup so a deploy can be checked against what it actually runs.
+  console.log(
+    `[close] session sweep every ${CLOSE_SWEEP_INTERVAL_MS / 1000}s — close price FETCHED at the close ` +
+    `(max age ${CLOSE_MAX_PRICE_AGE_MS / 1000}s); with no current price the fill is labelled stale, never silent`
+  );
   setInterval(() => {
+    runSessionClose({
+      systems: engineLive.liveSystems(),
+      ids: positionBook.ids,
+      get: positionBook.get,
+      apply: (ref, verdict) => engineLive.apply(ref, verdict),
+      reload: positionBook.reloadOne,
+      // The close price is FETCHED at the close, not remembered from whenever the symbol last
+      // printed (closeQuote.js). A fill at an hour-old price never happened in the market.
+      resolvePrice: closePriceResolver,
+      priceFor: (symbol) => lastPrice.get(symbol) ?? null,
+    }).catch((err) => console.error(`[close] sweep failed: ${err?.message || err}`));
+  }, CLOSE_SWEEP_INTERVAL_MS);
+
+  // How often the standby had to cover for Massive, and what large moves were seen, in one
+  // line every five minutes. Large moves are REPORTED ONLY — every one of them was used.
+  setInterval(() => {
+    const moves = largeMovesSummary();
+    if (moves.total) {
+      console.log(`[move] ${moves.total} large move(s) across ${moves.symbols} symbol(s) this process — all used, none refused`);
+    }
     if (PRICE_FEED !== "massive") return;
     const s = standby.summary();
     console.log(

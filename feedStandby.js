@@ -10,9 +10,11 @@
 //   Massive prints again                              → the takeover ends, the symbol is
 //                                                      back on Massive.
 //
-// Two guards apply to every standby price, so a backup can never reprice the book on a
-// bad print: the print itself must describe the present (MAX_PRINT_AGE_MS), and it may
-// not sit further than MAX_DEVIATION from the last accepted price for that symbol.
+// One guard applies to every standby price: the print itself must describe the present
+// (MAX_PRINT_AGE_MS). MAGNITUDE IS NOT A GUARD (2026-11-09) — a standby price at a new
+// level is exactly how a resumed symbol is recovered, so a percentage band here would
+// refuse the halt resume the standby exists to carry. Large moves are logged by the
+// router (worker.js noteLargeMove), never dropped.
 //
 // This module holds no socket and reads no clock: every entry point takes the time it
 // is called with, which is what lets the self-test drive a dropout exactly. It decides
@@ -23,7 +25,6 @@
 
 export const STALE_AFTER_MS = 15000;      // how long Massive may be silent before Finnhub covers a symbol
 export const MAX_PRINT_AGE_MS = 60000;    // a standby print older than this describes a finished tape
-export const MAX_DEVIATION = 0.03;        // a standby price this far from the last accepted price is a bad print
 
 const HISTORY_LIMIT = 200;
 
@@ -32,7 +33,7 @@ const lastAccepted = new Map(); // symbol -> last price this worker accepted (ei
 const active = new Map();       // symbol -> the takeover in progress
 const completed = [];           // finished takeovers, oldest first
 
-const dropped = { massiveCurrent: 0, stalePrint: 0, deviation: 0 };
+const dropped = { massiveCurrent: 0, stalePrint: 0 };
 
 function norm(symbol) {
   return String(symbol || "").toUpperCase();
@@ -96,16 +97,9 @@ export function admitFinnhub(symbol, price, { now = Date.now(), exchangeMs = nul
     }
   }
 
-  // 3. A standby price may not reprice the book.
-  const previous = lastAccepted.get(s);
-  if (previous) {
-    const deviation = Math.abs(numeric - previous) / previous;
-    if (deviation > MAX_DEVIATION) {
-      dropped.deviation += 1;
-      return { use: false, reason: "deviation", deviation, previous, massiveAgeMs };
-    }
-  }
-
+  // 3. NO MAGNITUDE TEST. The price is used whatever its distance from the last accepted
+  //    price: on a resume after a halt that distance IS the news, and refusing it would
+  //    leave the symbol uncovered by either feed. A large move is reported by the router.
   lastAccepted.set(s, numeric);
 
   let takeover = active.get(s);
@@ -166,5 +160,4 @@ export function reset() {
   completed.length = 0;
   dropped.massiveCurrent = 0;
   dropped.stalePrint = 0;
-  dropped.deviation = 0;
 }

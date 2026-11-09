@@ -21,6 +21,7 @@
 
 import WebSocket from "ws";
 import fetch from "node-fetch";
+import { assessFreshness } from "./tradeConditions.js";
 
 const WS_URL = "wss://socket.massive.com/stocks";
 const SNAPSHOT_URL = "https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers";
@@ -251,6 +252,25 @@ function stampToMs(stamp) {
   return n * 1000;               // seconds
 }
 
+// Everything else the frame says about the print, kept with the price so the consumer can
+// judge whether it is a price at all (tradeConditions.js):
+//   c    — the sale conditions the SIP stamped on it (Massive: /v3/reference/conditions)
+//   pt   — when the trade occurred at the exchange or TRF
+//   trft — when the TRF received it; trfi — which TRF
+//   q    — the tape sequence number
+// Reading only sym and p is what let the 2026-11-09 TRF flush through: the tape had
+// labelled every print condition 13, "Extended Hours (Sold Out Of Sequence)", for trades
+// executed before 05:00 ET.
+function printMeta(frame) {
+  return {
+    conditions: Array.isArray(frame.c) ? frame.c.map(Number) : [],
+    participantMs: stampToMs(frame.pt),
+    trfMs: stampToMs(frame.trft),
+    trfId: frame.trfi != null ? Number(frame.trfi) : null,
+    sequence: frame.q != null ? Number(frame.q) : null,
+  };
+}
+
 export async function snapshotPrice(symbol) {
   if (!apiKey) return null;
   try {
@@ -267,18 +287,17 @@ export async function snapshotPrice(symbol) {
     // substitute: a symbol with no recent print returns null and waits.
     const price = Number(ticker?.lastTrade?.p);
     const tradeMs = stampToMs(ticker?.lastTrade?.t);
-    const ageMs = tradeMs == null ? null : Date.now() - tradeMs;
 
     if (!Number.isFinite(price) || price <= 0) return null;
-    if (ageMs == null || ageMs < 0 || ageMs > SNAPSHOT_MAX_TRADE_AGE_MS) {
+    // AGE ONLY, NEVER MAGNITUDE (2026-11-09). A snapshot at a new level is exactly how a
+    // halted-and-resumed symbol is recovered, so its distance from this worker's last price
+    // is not a reason to refuse it. The small future allowance keeps a fast venue clock
+    // from locking a symbol out — and a locked symbol has no stop and no close.
+    const fresh = assessFreshness({ stampMs: tradeMs, maxAgeMs: SNAPSHOT_MAX_TRADE_AGE_MS });
+    if (!fresh.ok) {
       console.warn(
-        `[quote] ${symbol} REJECTED — ` +
-        (ageMs == null
-          ? "Massive snapshot carries no trade timestamp"
-          : ageMs < 0
-            ? `Massive snapshot trade stamp is ${Math.round(-ageMs / 1000)}s in the future`
-            : `Massive snapshot trade is ${Math.round(ageMs / 1000)}s old`) +
-        ` (limit ${SNAPSHOT_MAX_TRADE_AGE_MS / 1000}s)`
+        `[quote] ${symbol} REJECTED — Massive snapshot ${fresh.reason} ` +
+        `(limit ${SNAPSHOT_MAX_TRADE_AGE_MS / 1000}s)`
       );
       return null;
     }
@@ -454,8 +473,11 @@ function handle(raw) {
       const symbol = String(frame.sym || "").toUpperCase();
       const price = Number(frame.p);
       // The frame carries the venue's own stamp; keeping it is what lets this print
-      // be measured against its arrival time (and against Finnhub's print).
-      if (symbol && Number.isFinite(price) && price > 0) publish(symbol, price, stampToMs(frame.t));
+      // be measured against its arrival time (and against Finnhub's print). Its
+      // provenance — the sale conditions and the execution time — travels with it too.
+      if (symbol && Number.isFinite(price) && price > 0) {
+        publish(symbol, price, stampToMs(frame.t), printMeta(frame));
+      }
     }
   }
 }
@@ -496,7 +518,7 @@ function onStatus(frame) {
   }
 }
 
-function publish(symbol, price, exchangeMs) {
+function publish(symbol, price, exchangeMs, meta) {
   const at = Date.now();
   stats.trades += 1;
   lastTrade.set(symbol, { price, at });
@@ -504,10 +526,11 @@ function publish(symbol, price, exchangeMs) {
 
   if (mode === "live") {
     try {
-      // The venue's own stamp travels WITH the price: the consumer is what decides
-      // whether a print describes the present (worker.js onMassivePrice). Dropping it
-      // here is what made a replayed pre-open frame look like a live price.
-      if (onPrice) onPrice(symbol, price, exchangeMs);
+      // The venue's own stamp travels WITH the price, and so does everything else the
+      // frame says about the print: the consumer is what decides whether it describes
+      // the present (worker.js onMassivePrice, tradeConditions.js). Dropping these here
+      // is what made a 14-hour-old execution look like a live price on 2026-11-09.
+      if (onPrice) onPrice(symbol, price, exchangeMs, meta);
     } catch (err) {
       console.error(`[massive] route failed for ${symbol}: ${String(err?.message || err).slice(0, 120)}`);
     }
