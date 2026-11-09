@@ -195,8 +195,8 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const closed = decideTick({ system: "B", position: pos({ status: "closed" }), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("guard: a closed position decides nothing", closed.action, "skipped");
   check("guard: reason is already_closed", closed.reason, "already_closed");
-  const halted = decideTick({ system: "D", position: pos({}), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
-  check("guard: a halted account trades nothing", halted.action, "halted");
+  const halted = decideTick({ system: "E", position: pos({}), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("guard: a halted account (E) trades nothing", halted.action, "halted");
 }
 
 // --- report ------------------------------------------------------------------
