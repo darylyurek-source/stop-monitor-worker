@@ -248,15 +248,13 @@ export const LOSS_LEVELS = [
 ];
 
 // ---------------------------------------------------------------------------
-// systemHalt.ts — D and E are halted (C reactivated 2026-11-01). A halted account
+// systemHalt.ts — E is the only halted account. C was reactivated 2026-11-01 and
+// D was reactivated 2026-11-09, ahead of that morning's open. A halted account
 // trades nothing: the engine returns a no-op decision and writes nothing.
-// D is wired onto the Render engine ahead of its activation (2026-11-08): its
-// switchboard row says engine render / mode live, and this halt outranks it, so the
-// engine decides every one of D's ticks and the verdict is "halted" — no press, no
-// exit, no write. Removing "D" here (shared/systemHalt.ts on the Base44 side) is the
-// one change that turns the account on.
+// This list must always be kept in step with shared/systemHalt.ts on the Base44
+// side — the engine holds its own copy so a tick never depends on a network read.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = ["D", "E"];
+export const HALTED_SYSTEMS = ["E"];
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 
