@@ -48,6 +48,7 @@ import { applyTick as recordBar, configure as configureCandles } from "./candleS
 import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
 import * as standby from "./feedStandby.js";
+import { HALTED_SYSTEMS, isSystemHalted } from "./tickRules.js";
 
 const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
@@ -1081,7 +1082,14 @@ async function verifyDatabase() {
 // ------------------------------------------------------------
 
 async function start() {
-  console.log("Starting DART A/B/C real-time tick router (paper, USD) — D and E excluded...");
+  // The halt list this process actually runs on, printed at startup, so a deploy can
+  // be checked against it instead of assumed: halted accounts decide nothing, and
+  // every other account is live here.
+  console.log(
+    `Starting DART real-time tick router (paper, USD) — live: ${["ANEW", "B", "C", "D"]
+      .filter((s) => !isSystemHalted(s))
+      .join(", ")} | halted: ${HALTED_SYSTEMS.join(", ") || "none"}`
+  );
 
   // Graceful stop. The price providers allow ONE stream per account, so this process
   // must release its sockets before it exits — otherwise a redeploy's old instance
