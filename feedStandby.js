@@ -23,8 +23,12 @@
 // Every takeover is kept: symbol, when Finnhub started serving it, when Massive took it
 // back, how long that lasted and how many standby prints it carried.
 
+import { SOURCE_LIMITS } from "./tradeConditions.js";
+
 export const STALE_AFTER_MS = 15000;      // how long Massive may be silent before Finnhub covers a symbol
-export const MAX_PRINT_AGE_MS = 60000;    // a standby print older than this describes a finished tape
+// ONE freshness table for every source (tradeConditions.SOURCE_LIMITS), so this file cannot
+// hold its own private idea of "current" and drift away from the gate's.
+export const MAX_PRINT_AGE_MS = SOURCE_LIMITS.finnhub_stream;
 
 const HISTORY_LIMIT = 200;
 
@@ -33,7 +37,7 @@ const lastAccepted = new Map(); // symbol -> last price this worker accepted (ei
 const active = new Map();       // symbol -> the takeover in progress
 const completed = [];           // finished takeovers, oldest first
 
-const dropped = { massiveCurrent: 0, stalePrint: 0 };
+const dropped = { massiveCurrent: 0, stalePrint: 0, noStamp: 0 };
 
 function norm(symbol) {
   return String(symbol || "").toUpperCase();
@@ -85,16 +89,19 @@ export function admitFinnhub(symbol, price, { now = Date.now(), exchangeMs = nul
     return { use: false, reason: "massive_current", massiveAgeMs };
   }
 
-  // 2. The print itself must describe the present, not a finished tape. A socket print
-  //    carries the venue's own stamp; one without a stamp is judged on the routing
-  //    staleness above alone, exactly as the REST quote path always has.
+  // 2. The print must carry its own execution stamp AND describe the present. A print with no
+  //    stamp cannot be judged at all, and an unjudgeable price is not a price: it is REFUSED,
+  //    never admitted on the routing staleness alone (that was the 2026-11-09 hole — the
+  //    stream, the snapshot and the standby each judged provenance to a different standard).
   const stamp = Number(exchangeMs);
-  if (Number.isFinite(stamp) && stamp > 0) {
-    const printAgeMs = now - stamp;
-    if (printAgeMs > MAX_PRINT_AGE_MS) {
-      dropped.stalePrint += 1;
-      return { use: false, reason: "stale_print", printAgeMs, massiveAgeMs };
-    }
+  if (!Number.isFinite(stamp) || stamp <= 0) {
+    dropped.noStamp += 1;
+    return { use: false, reason: "no_stamp", massiveAgeMs };
+  }
+  const printAgeMs = now - stamp;
+  if (printAgeMs > MAX_PRINT_AGE_MS) {
+    dropped.stalePrint += 1;
+    return { use: false, reason: "stale_print", printAgeMs, massiveAgeMs };
   }
 
   // 3. NO MAGNITUDE TEST. The price is used whatever its distance from the last accepted
@@ -160,4 +167,5 @@ export function reset() {
   completed.length = 0;
   dropped.massiveCurrent = 0;
   dropped.stalePrint = 0;
+  dropped.noStamp = 0;
 }

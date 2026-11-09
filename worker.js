@@ -247,8 +247,8 @@ const lastTick = new Map();
 // never a reason to refuse one.
 const lastPrice = new Map();
 
-// A fallback quote may not describe an older session. AGE ONLY — see LARGE_MOVE_DEVIATION.
-const FALLBACK_MAX_QUOTE_AGE_MS = 60000;
+// A quote may not describe an older session — its limit is tradeConditions.SOURCE_LIMITS
+// (finnhub_quote), applied by the ONE gate on both this path and the socket path.
 
 // LARGE MOVES ARE REPORTED, NEVER REFUSED (2026-11-09). A percentage band cannot tell a bad
 // price from a good one — a halt resume, an opening gap and a news spike are genuine prints —
@@ -257,20 +257,24 @@ const FALLBACK_MAX_QUOTE_AGE_MS = 60000;
 // diagnostic only, and it lives in largeMoves.js, whose every line describes a price that WAS
 // used. Notice it is never asked here whether to accept anything.
 
-// A STREAM print carries the venue's own stamp, and that stamp is the only proof the
-// print describes the present. Measured transit is tens of milliseconds, so this is a
-// wide margin against clock skew and still far tighter than the 60 s the quote paths use.
-const STREAM_MAX_PRINT_AGE_MS = 10000;
+// EVERY freshness limit lives in ONE table now (tradeConditions.SOURCE_LIMITS): the stream at
+// 10 s, the snapshot and both Finnhub paths at 60 s. A source can no longer carry its own idea
+// of "current", which is exactly how a stale print used to slip in through the quietest door.
+
+// A symbol holding an open position and receiving no accepted price has no stop and no close.
+// If the gate has been refusing everything for one, that symbol is NAMED in the heartbeat
+// rather than looking like a quiet market.
+const SILENT_SYMBOL_ALERT_MS = 300000;
 
 // symbol -> how many stream prints were refused, so a replay burst cannot flood the log.
 const streamRejected = new Map();
 
-function rejectStreamPrint(symbol, price, reason) {
+function rejectStreamPrint(symbol, price, reason, tag = "stream") {
   const seen = (streamRejected.get(symbol) || 0) + 1;
   streamRejected.set(symbol, seen);
   if (seen <= 3 || seen % 100 === 0) {
     console.warn(
-      `[stream] ${symbol} print ${price} REJECTED — ${reason}` +
+      `[${tag}] ${symbol} print ${price} REJECTED — ${reason}` +
       (seen > 3 ? ` (${seen} refused on this symbol)` : "")
     );
   }
@@ -764,53 +768,86 @@ function standbySubscriptions() {
   return symbols;
 }
 
-// One Massive STREAM print. The venue's stamp travels with it, and it is the only proof
-// the print describes the present — so it is required.
+// One Massive STREAM print. Every question about it is now asked by ONE gate
+// (tradeConditions.admitPrice), so a stream print, a snapshot, a standby print and a quote
+// cannot be judged by four different standards — the inconsistency that left five of the six
+// price doors unguarded on 2026-11-09.
 //
-// GUARD (cut 2026-11-09, re-cut the same evening). Two questions, in this order:
+//   refuse      — its sale conditions, its age, or its execution time walking backwards say
+//                 it does not describe the present. Dropped without touching the book; the
+//                 next print decides.
+//   quarantine  — fresh, but with NO execution stamp (no pt, no trft): nothing on the tape
+//                 says when it traded. It may value a position; it may not close one. It is
+//                 replaced by a snapshot judged by this same gate (confirmUnprovenanced).
+//   use         — adopted exactly as before.
 //
-//   1. WHAT IS THIS PRINT? tradeConditions.js answers from the frame's own fields: the
-//      sale conditions the SIP stamped on it, and the gap between when it executed (pt)
-//      and when it was taped (t). This is the decisive test, and it is the one the 14:51
-//      flush fails — every print that closed a position carried condition 13, "Extended
-//      Hours (Sold Out Of Sequence)", for a trade executed 11-15 hours earlier.
-//
-//   2. HOW OLD IS IT? A print older than STREAM_MAX_PRINT_AGE_MS describes a finished tape
-//      and is not a price.
-//
-// HOW FAR THE PRICE MOVED IS NOT A QUESTION HERE ANY MORE (2026-11-09). Magnitude decided
-// nothing until it had already caused the damage it was meant to prevent: because the
-// reference price only advanced on an ACCEPTED print, one rejected print refused every
-// later one too. Size is now reported by noteLargeMove and never refused. Anything refused
-// above is dropped without touching the book, and the next print decides.
-function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
-  // 1. Eligibility, from what the tape says this print is.
-  const eligibility = tradeConditions.assess({
-    conditions: meta.conditions,
-    participantMs: meta.participantMs,
-    tapeMs: exchangeMs,
-  });
-  if (!eligibility.eligible) {
-    rejectStreamPrint(symbol, price, eligibility.reason);
-    return;
-  }
+// HOW FAR THE PRICE MOVED IS NOT A QUESTION HERE. No test in the gate takes a price, so a
+// halt resume, an opening gap and a news spike are all prices. Size is reported by
+// noteLargeMove and never refused.
+async function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
+  try {
+    const verdict = tradeConditions.admitPrice({
+      source: "massive_stream",
+      symbol,
+      price,
+      stampMs: exchangeMs,
+      conditions: meta.conditions,
+      participantMs: meta.participantMs,
+      trfMs: meta.trfMs,
+    });
 
-  // 2. The print must describe the present. FRESHNESS IS AGE ONLY — it takes no price, so a
-  //    halt resume 20 % away, an opening gap or a news spike is a price whatever its size.
-  const freshness = tradeConditions.assessFreshness({
-    stampMs: exchangeMs,
-    maxAgeMs: STREAM_MAX_PRINT_AGE_MS,
-  });
-  if (!freshness.ok) {
-    rejectStreamPrint(symbol, price, `print ${freshness.reason}`);
-    return;
-  }
+    if (verdict.tier === "refuse") {
+      rejectStreamPrint(symbol, price, verdict.reason);
+      return;
+    }
+    if (verdict.tier === "quarantine") {
+      await confirmUnprovenanced(symbol, price, verdict);
+      return;
+    }
 
-  adoptMassivePrice(symbol, price, Number(exchangeMs));
+    adoptMassivePrice(symbol, price, Number(exchangeMs));
+  } catch (err) {
+    console.error(`[stream] ${symbol} gate error: ${err?.message || err}`);
+  }
 }
 
-// A Massive price that has ALREADY been validated — by the stream guard above, or by the
-// snapshot fallback's own age check. Books it as current (ending any Finnhub takeover) and
+// A fresh print with no execution stamp cannot be trusted to close a position — but neither
+// may it be ignored, because a symbol with no price has no stop and no close. So it is
+// REPLACED by a price the same gate accepts: one snapshot, whose last trade carries its own
+// stamp and its own conditions. With no such price the print is dropped, counted, and the next
+// print decides — never a fill at a price nothing on the tape confirmed, and never a silent
+// pass either way.
+async function confirmUnprovenanced(symbol, price, verdict) {
+  // If a newer print is admitted for this symbol while the snapshot is in flight, that print
+  // has already decided — a corroborating price must never overwrite a newer one.
+  const before = lastTick.get(symbol);
+  const snapshot = await massiveFeed.snapshotTick(symbol);
+  if (lastTick.get(symbol) !== before) return;
+  if (!snapshot) {
+    rejectStreamPrint(symbol, price, `${verdict.reason}; no corroborating snapshot`);
+    return;
+  }
+
+  const confirmed = tradeConditions.admitPrice({
+    source: "massive_snapshot",
+    symbol,
+    price: snapshot.price,
+    stampMs: snapshot.stampMs,
+    conditions: snapshot.conditions,
+  });
+  if (confirmed.tier !== "use") {
+    rejectStreamPrint(symbol, price, `${verdict.reason}; snapshot ${confirmed.reason}`);
+    return;
+  }
+
+  console.log(
+    `[gate] ${symbol} unprovenanced print ${fmt(price)} replaced by snapshot ${fmt(snapshot.price)}`
+  );
+  adoptMassivePrice(symbol, snapshot.price, snapshot.stampMs);
+}
+
+// A Massive price that has ALREADY been validated — by the gate, on whichever door it came
+// through. Books it as current (ending any Finnhub takeover) and
 // routes it exactly as before. Kept separate so the stamp rule cannot reject the one path
 // that was already safe. No magnitude test exists on either side.
 function adoptMassivePrice(symbol, price, exchangeMs = null) {
@@ -931,8 +968,20 @@ function connectWebSocket() {
         const price = Number(trade.p);
 
         if (symbol && Number.isFinite(price) && price > 0) {
-          // `trade.t` is Finnhub's own epoch-ms stamp for this print.
+          // `trade.t` is Finnhub's own epoch-ms stamp for this print, and it is REQUIRED: a
+          // print with no stamp cannot be judged, and an unjudgeable price is refused (the
+          // hole that admitted one on the routing staleness alone).
           const stamp = Number(trade.t);
+          const verdict = tradeConditions.admitPrice({
+            source: "finnhub_stream",
+            symbol,
+            price,
+            stampMs: stamp,
+          });
+          if (verdict.tier !== "use") {
+            rejectStreamPrint(symbol, price, verdict.reason, "standby");
+            continue;
+          }
           // Massive mode: Finnhub only covers a symbol Massive has gone quiet on.
           if (PRICE_FEED === "massive" && !standbyAdmits(symbol, price, stamp)) continue;
           routeTick(symbol, price, stamp);
@@ -1032,7 +1081,27 @@ async function pollQuietSymbols() {
       let exchangeMs = null;
       let fromFinnhub = false;
 
-      if (massivePrimary) price = await massiveFeed.snapshotPrice(symbol);
+      if (massivePrimary) {
+        // The snapshot is judged by the SAME gate as a stream print — its own trade stamp for
+        // freshness, its own sale conditions, and the same monotonic tape test. Recovering a
+        // quiet symbol is precisely where a re-published old print used to slip in unjudged.
+        const snapshot = await massiveFeed.snapshotTick(symbol);
+        if (snapshot) {
+          const verdict = tradeConditions.admitPrice({
+            source: "massive_snapshot",
+            symbol,
+            price: snapshot.price,
+            stampMs: snapshot.stampMs,
+            conditions: snapshot.conditions,
+          });
+          if (verdict.tier === "use") {
+            price = snapshot.price;
+            exchangeMs = snapshot.stampMs;
+          } else {
+            console.warn(`[quote] ${symbol} REJECTED — snapshot ${verdict.reason}`);
+          }
+        }
+      }
 
       if (!massivePrimary || price == null) {
         const res = await fetch(
@@ -1042,22 +1111,23 @@ async function pollQuietSymbols() {
         if (!res.ok) continue;
 
         const q = await res.json();
-        // q.t is when the quote was last updated (epoch seconds). A quote older than the
-        // limit describes a finished session — its `c` is that session's close, and routing
-        // it would value an open position off a dead tape. AGE ONLY, never magnitude.
+        // q.t is when the quote was last updated (epoch seconds), and it is the ONLY thing that
+        // says the quote describes the present. A quote without it, or an old one, is refused:
+        // its `c` would be a dead tape's close valued as a live price. AGE ONLY, never
+        // magnitude — and the limit now comes from the gate, not from this file.
         const quoteTs = numberOrNull(q && q.t);
-        const quoteFresh = tradeConditions.assessFreshness({
+        const quotePrice = numberOrNull(q && q.c);
+        const verdict = tradeConditions.admitPrice({
+          source: "finnhub_quote",
+          symbol,
+          price: quotePrice,
           stampMs: quoteTs ? quoteTs * 1000 : null,
-          maxAgeMs: FALLBACK_MAX_QUOTE_AGE_MS,
         });
-        if (!quoteFresh.ok) {
-          console.warn(
-            `[quote] ${symbol} REJECTED — quote ${quoteFresh.reason} ` +
-            `(limit ${FALLBACK_MAX_QUOTE_AGE_MS / 1000}s)`
-          );
+        if (verdict.tier !== "use") {
+          console.warn(`[quote] ${symbol} REJECTED — ${verdict.reason}`);
           continue;
         }
-        price = numberOrNull(q && q.c);
+        price = quotePrice;
         exchangeMs = quoteTs ? quoteTs * 1000 : null;
         fromFinnhub = massivePrimary;
       }
@@ -1074,8 +1144,8 @@ async function pollQuietSymbols() {
         // and a quiet symbol is often one that halted and resumed somewhere else entirely —
         // a band here would refuse the very resume it was built to carry. Age was checked
         // above; any large move is reported by noteLargeMove, never refused.
-        if (massivePrimary) adoptMassivePrice(symbol, price);
-        else routeTick(symbol, price);
+        if (massivePrimary) adoptMassivePrice(symbol, price, exchangeMs);
+        else routeTick(symbol, price, exchangeMs);
       }
     } catch (err) {
       console.error(`[quote] ${symbol} error:`, err.message);
@@ -1218,6 +1288,28 @@ async function start() {
     if (moves.total) {
       console.log(`[move] ${moves.total} large move(s) across ${moves.symbols} symbol(s) this process — all used, none refused`);
     }
+
+    // THE GATE, IN ONE LINE (2026-11-09). Every source's verdicts are counted by reason, so a
+    // door that has started refusing everything is visible instead of looking like a quiet
+    // market — and a symbol holding an open position with no accepted price is NAMED, because
+    // that symbol has no stop and no close.
+    const gate = tradeConditions.gateSummary();
+    const codes = Object.entries(gate.byCode);
+    console.log(
+      `[gate] use=${gate.use} quarantine=${gate.quarantine} refuse=${gate.refuse}` +
+      (codes.length ? ` (${codes.map(([code, n]) => `${code}=${n}`).join(", ")})` : "")
+    );
+    const silent = [...symbolPositions.keys()].filter((s) => {
+      const at = lastTick.get(s) || 0;
+      return !at || Date.now() - at > SILENT_SYMBOL_ALERT_MS;
+    });
+    if (silent.length) {
+      console.warn(
+        `[gate] NO ACCEPTED PRICE — ${silent.join(", ")}: a position in one of these has no stop ` +
+        `and no close until a print passes the gate`
+      );
+    }
+
     if (PRICE_FEED !== "massive") return;
     const s = standby.summary();
     console.log(

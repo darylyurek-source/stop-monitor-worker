@@ -114,3 +114,187 @@ export function assess({ conditions, participantMs, tapeMs } = {}) {
 
   return { eligible: true, reason: null };
 }
+
+// ---------------------------------------------------------------------------
+// THE GATE — one door for every price source (2026-11-09, second cut)
+// ---------------------------------------------------------------------------
+//
+// The first cut above guarded the Massive STREAM only. Measured against the day, that left
+// five other doors: the Massive snapshot used to recover a quiet symbol and to price the
+// close, the Finnhub standby socket, the Finnhub REST quote, the close resolver's own held
+// price, and Finnhub-primary mode — which applied no gate at all. Two of them did not merely
+// lack a rule, they had a rule that ADMITTED an unprovenanced print ("judged on the routing
+// staleness alone"). A price could therefore be judged to six different standards depending
+// on which door it came through.
+//
+// So every price now answers the same four questions, in the same order, here:
+//
+//   1. IS IT A PRICE?      a finite positive number, from a source this file knows.
+//   2. WHAT IS IT?         its sale conditions (Massive only — Finnhub's codes are a
+//                          different namespace and are never read as if they were the SIP's).
+//   3. HOW OLD IS IT?      its own stamp against that source's limit. AGE, never MAGNITUDE:
+//                          no test in this file takes a price, so a halt resume 20 % away, an
+//                          opening gap and a news spike are all prices. The 3 % band stays
+//                          removed — it refused good prices and, worse, froze symbols.
+//   4. DOES THE TAPE MOVE BACKWARDS?  a print whose execution time sits further behind the
+//                          last accepted execution for that symbol than
+//                          REGRESSION_TOLERANCE_MS is a RE-PUBLICATION of an earlier trade,
+//                          whatever door it arrived on. This is the test that catches a
+//                          taped-late print on a path that carries no sale conditions.
+//
+// Three answers, not two:
+//
+//   use        fresh and provenanced — valued, rules evaluated, presses and exits written.
+//   quarantine fresh but with NO execution stamp (no pt, no trft). It may value a position;
+//              it may not close one. The worker replaces it with a corroborating snapshot
+//              judged by this same gate (worker.js confirmUnprovenanced). A fresh print with
+//              nothing to judge it is never silently admitted — and never silently dropped
+//              either, because a symbol with no price has no stop and no close.
+//   refuse     dropped and counted. The book is untouched; the next print decides.
+//
+// Nothing here sizes, prices, or decides a trade. It answers what a price IS.
+
+// Each source's own freshness limit. The stream is milliseconds behind; a snapshot or a quote
+// may be up to a minute old and still describe the market. A source with no entry here is
+// refused rather than given a default — an unknown door is not a door.
+export const SOURCE_LIMITS = Object.freeze({
+  massive_stream: 10000,
+  massive_snapshot: 60000,
+  finnhub_stream: 60000,
+  finnhub_quote: 60000,
+});
+
+// How far an execution time may walk backwards and still be a genuine out-of-order print.
+// Exchanges report the same instant in slightly different orders; minutes do not.
+export const REGRESSION_TOLERANCE_MS = 2000;
+
+// symbol -> the latest execution time this gate has accepted. Ratchets forward only.
+const lastExecution = new Map();
+
+// Counted by tier, by source and by reason code, so a path that has started refusing
+// everything is visible in the heartbeat instead of looking like a quiet market.
+const gateCounts = { use: 0, quarantine: 0, refuse: 0, byCode: {}, bySource: {} };
+
+function countVerdict(tier, source, code) {
+  gateCounts[tier] += 1;
+  const per = gateCounts.bySource[source] || { use: 0, quarantine: 0, refuse: 0 };
+  per[tier] += 1;
+  gateCounts.bySource[source] = per;
+  if (code) gateCounts.byCode[code] = (gateCounts.byCode[code] || 0) + 1;
+}
+
+export function gateSummary() {
+  return {
+    use: gateCounts.use,
+    quarantine: gateCounts.quarantine,
+    refuse: gateCounts.refuse,
+    byCode: { ...gateCounts.byCode },
+    bySource: Object.fromEntries(
+      Object.entries(gateCounts.bySource).map(([k, v]) => [k, { ...v }])
+    ),
+    symbolsTracked: lastExecution.size,
+  };
+}
+
+// Test support only: forget every execution time and count this process has recorded.
+export function resetGate() {
+  lastExecution.clear();
+  gateCounts.use = 0;
+  gateCounts.quarantine = 0;
+  gateCounts.refuse = 0;
+  gateCounts.byCode = {};
+  gateCounts.bySource = {};
+}
+
+// The verdict for one price, from any source.
+//   source        — one of SOURCE_LIMITS.
+//   symbol        — the symbol the price belongs to (the tape registry is per symbol).
+//   price         — the number that would reach a rule.
+//   stampMs       — that source's own stamp for the print (tape t, snapshot lastTrade.t,
+//                   Finnhub trade t, quote t). REQUIRED: an unstamped price is refused.
+//   conditions    — Massive's sale conditions only.
+//   participantMs — Massive's pt (execution time at the exchange or TRF).
+//   trfMs         — Massive's trft (when the TRF received it), used when pt is absent.
+export function admitPrice({
+  source,
+  symbol,
+  price,
+  stampMs,
+  nowMs = Date.now(),
+  conditions = [],
+  participantMs = null,
+  trfMs = null,
+} = {}) {
+  const src = String(source || "");
+  const sym = String(symbol || "").toUpperCase();
+  const limit = SOURCE_LIMITS[src];
+
+  const verdict = (tier, code, reason, extra) => {
+    countVerdict(tier, src, code);
+    return { tier, code, reason, source: src, symbol: sym, ...extra };
+  };
+
+  // 1. IS IT A PRICE, FROM A DOOR WE KNOW?
+  if (!limit) return verdict("refuse", "unknown_source", `no admission profile for source "${src}"`);
+  const numeric = Number(price);
+  if (!Number.isFinite(numeric) || numeric <= 0) return verdict("refuse", "bad_price", "not a positive price");
+
+  // 2. WHAT IS IT? Only Massive stamps SIP sale conditions. Finnhub's condition codes are a
+  //    different namespace, so a Finnhub price is judged on its stamp alone — never mapped.
+  for (const code of Array.isArray(conditions) ? conditions : []) {
+    const name = EXTENDED_HOURS_CONDITIONS[Number(code)];
+    if (name) return verdict("refuse", "extended_hours", `sale condition ${Number(code)} ${name}`);
+  }
+
+  // 3. HOW OLD IS IT? One freshness implementation (assessFreshness), one limit per source.
+  const fresh = assessFreshness({ stampMs, nowMs, maxAgeMs: limit });
+  if (!fresh.ok) {
+    const numericStamp = Number(stampMs);
+    const code = !Number.isFinite(numericStamp) || numericStamp <= 0
+      ? "no_stamp"
+      : Number(fresh.ageMs) < 0 ? "future" : "stale";
+    return verdict("refuse", code, `${src} price ${fresh.reason} (limit ${limit / 1000}s)`, { ageMs: fresh.ageMs });
+  }
+
+  // 4. DID IT TRADE WHEN IT ARRIVED? A print executed before it was taped is a re-publication
+  //    whatever its conditions say, and a print whose execution time walks behind one already
+  //    accepted is an old trade arriving late.
+  const executedMs = Number(participantMs) > 0 ? Number(participantMs) : null;
+  const receivedMs = Number(trfMs) > 0 ? Number(trfMs) : null;
+  const tapeMs = Number(stampMs);
+
+  if (executedMs != null) {
+    const lagMs = tapeMs - executedMs;
+    if (lagMs > MAX_EXECUTION_LAG_MS) {
+      return verdict("refuse", "late_print", `executed ${formatLag(lagMs)} before it was taped`, { lagMs });
+    }
+  }
+
+  // The print's own execution time: the venue's (pt), else the TRF's receipt (trft), else —
+  // for a source whose stamp IS the trade time — the stamp itself.
+  const executionMs = executedMs ?? receivedMs ?? tapeMs;
+  const previous = lastExecution.get(sym);
+  if (previous != null && executionMs < previous - REGRESSION_TOLERANCE_MS) {
+    return verdict(
+      "refuse",
+      "regressed",
+      `execution time walks back ${((previous - executionMs) / 1000).toFixed(1)}s behind the last accepted print`,
+      { executionMs, previousExecutionMs: previous }
+    );
+  }
+  lastExecution.set(sym, Math.max(previous ?? executionMs, executionMs));
+
+  // Provenance: only a Massive stream print can be missing it. Every other source's stamp IS
+  // its execution time, so it is provenanced by construction.
+  const provenanced = src !== "massive_stream" || executedMs != null || receivedMs != null;
+  if (!provenanced) {
+    return verdict(
+      "quarantine",
+      "no_execution_stamp",
+      "print carries no execution stamp (neither pt nor trft) — may value a position, may not close one",
+      { executionMs }
+    );
+  }
+
+  return verdict("use", null, null, { ageMs: fresh.ageMs, executionMs });
+}

@@ -21,7 +21,7 @@
 
 import WebSocket from "ws";
 import fetch from "node-fetch";
-import { assessFreshness } from "./tradeConditions.js";
+import { admitPrice, SOURCE_LIMITS } from "./tradeConditions.js";
 
 const WS_URL = "wss://socket.massive.com/stocks";
 const SNAPSHOT_URL = "https://api.massive.com/v2/snapshot/locale/us/markets/stocks/tickers";
@@ -238,8 +238,8 @@ export function noteFinnhubPrice(symbol, price, exchangeMs) {
 
 // Quiet-symbol fallback: one snapshot per symbol, no per-minute ceiling.
 // A snapshot's last trade older than this describes a finished tape, not a live
-// price. Same limit as the Finnhub quiet-symbol guard (FALLBACK_MAX_QUOTE_AGE_MS).
-export const SNAPSHOT_MAX_TRADE_AGE_MS = 60000;
+// price. Same limit as the Finnhub paths — one table for all of them (tradeConditions.SOURCE_LIMITS).
+export const SNAPSHOT_MAX_TRADE_AGE_MS = SOURCE_LIMITS.massive_snapshot;
 
 // Massive stamps its trades in a compact epoch (measured on this key: microseconds).
 // Resolve the unit from the magnitude instead of assuming one, so the age is real.
@@ -271,7 +271,31 @@ function printMeta(frame) {
   };
 }
 
-export async function snapshotPrice(symbol) {
+// One snapshot, as a PRINT rather than a bare number: the price, its own trade stamp, its
+// sale conditions and its exchange. A bare number cannot be judged — and on 2026-11-09 the
+// snapshot path was the one that could reprice a position with nothing to check it against.
+function parseSnapshot(body) {
+  const ticker = body?.ticker || null;
+  const last = ticker?.lastTrade || null;
+
+  // ONLY the last trade is a price. day.c and min.c are the session's and the minute's close
+  // — the last value of a dead tape — so they are never a substitute: a symbol with no recent
+  // print returns null and waits.
+  const price = Number(last?.p);
+  if (!Number.isFinite(price) || price <= 0) return null;
+
+  return {
+    price,
+    stampMs: stampToMs(last?.t),
+    exchange: last?.x != null ? Number(last.x) : null,
+    conditions: Array.isArray(last?.c) ? last.c.map(Number) : [],
+  };
+}
+
+// The snapshot as a print. No age check here on purpose: the caller hands it to the ONE gate
+// (tradeConditions.admitPrice), which applies the same freshness, provenance and monotonic
+// tape tests a stream print gets, so the two doors cannot drift apart.
+export async function snapshotTick(symbol) {
   if (!apiKey) return null;
   try {
     const res = await fetch(
@@ -280,32 +304,34 @@ export async function snapshotPrice(symbol) {
     );
     if (!res.ok) return null;
     const body = await res.json().catch(() => null);
-    const ticker = body?.ticker || null;
-
-    // ONLY the last trade is a price. day.c and min.c are the session's and the
-    // minute's close — the last value of a dead tape — so they are never a
-    // substitute: a symbol with no recent print returns null and waits.
-    const price = Number(ticker?.lastTrade?.p);
-    const tradeMs = stampToMs(ticker?.lastTrade?.t);
-
-    if (!Number.isFinite(price) || price <= 0) return null;
-    // AGE ONLY, NEVER MAGNITUDE (2026-11-09). A snapshot at a new level is exactly how a
-    // halted-and-resumed symbol is recovered, so its distance from this worker's last price
-    // is not a reason to refuse it. The small future allowance keeps a fast venue clock
-    // from locking a symbol out — and a locked symbol has no stop and no close.
-    const fresh = assessFreshness({ stampMs: tradeMs, maxAgeMs: SNAPSHOT_MAX_TRADE_AGE_MS });
-    if (!fresh.ok) {
-      console.warn(
-        `[quote] ${symbol} REJECTED — Massive snapshot ${fresh.reason} ` +
-        `(limit ${SNAPSHOT_MAX_TRADE_AGE_MS / 1000}s)`
-      );
-      return null;
-    }
-    return price;
+    return parseSnapshot(body);
   } catch (err) {
     stats.lastError = String(err?.message || err).slice(0, 120);
     return null;
   }
+}
+
+// The snapshot as a number, for the 16:00 close, which asks the market for a price and labels
+// what it gets. It is judged by the SAME gate as a stream print — age, sale conditions and the
+// monotonic tape test — so a re-publication flushed near the close cannot price a fill either.
+// AGE ONLY, NEVER MAGNITUDE: a snapshot at a new level is how a halted-and-resumed symbol is
+// recovered, so its distance from this worker's last price is not a reason to refuse it.
+export async function snapshotPrice(symbol) {
+  const tick = await snapshotTick(symbol);
+  if (!tick) return null;
+
+  const verdict = admitPrice({
+    source: "massive_snapshot",
+    symbol,
+    price: tick.price,
+    stampMs: tick.stampMs,
+    conditions: tick.conditions,
+  });
+  if (verdict.tier !== "use") {
+    console.warn(`[quote] ${symbol} REJECTED — Massive snapshot ${verdict.reason}`);
+    return null;
+  }
+  return tick.price;
 }
 
 export function statsSummary() {

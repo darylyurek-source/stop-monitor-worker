@@ -3,8 +3,8 @@
 //     node render-worker/feedStandbySelfTest.js
 //
 // Part 1 pins the gate: a Massive print makes Finnhub silent, 15 s of silence lets it
-// through, the 60 s print-age and 3 % deviation guards reject a bad print, and Massive's
-// next print closes the takeover.
+// through, the 60 s print-age guard rejects an old print, MAGNITUDE IS NOT A GATE (a 20 %
+// move is used, 2026-11-09), and Massive's next print closes the takeover.
 //
 // Part 2 replays a Massive dropout end to end and prints the timeline, so the takeover
 // and the hand-back are visible rather than only asserted.
@@ -20,7 +20,6 @@ import {
   reset,
   STALE_AFTER_MS,
   MAX_PRINT_AGE_MS,
-  MAX_DEVIATION,
 } from "./feedStandby.js";
 
 let cases = 0;
@@ -47,25 +46,25 @@ noteMassive("AAPL", 100, T0);
 
 check(
   "Finnhub silent while Massive is current",
-  admitFinnhub("AAPL", 100.01, { now: T0 + 1000 }),
+  admitFinnhub("AAPL", 100.01, { now: T0 + 1000, exchangeMs: T0 + 1000 }),
   { use: false, reason: "massive_current", massiveAgeMs: 1000 }
 );
 
 check(
   "exactly 15 s of Massive silence is still 'current'",
-  admitFinnhub("AAPL", 100.01, { now: T0 + STALE_AFTER_MS }),
+  admitFinnhub("AAPL", 100.01, { now: T0 + STALE_AFTER_MS, exchangeMs: T0 + STALE_AFTER_MS }),
   { use: false, reason: "massive_current", massiveAgeMs: STALE_AFTER_MS }
 );
 
 check(
   "15 s + 1 ms lets Finnhub take the symbol over",
-  admitFinnhub("AAPL", 100.02, { now: T0 + STALE_AFTER_MS + 1 }),
+  admitFinnhub("AAPL", 100.02, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1 }
 );
 
 check(
   "a second standby print continues the same takeover",
-  admitFinnhub("AAPL", 100.03, { now: T0 + STALE_AFTER_MS + 500 }),
+  admitFinnhub("AAPL", 100.03, { now: T0 + STALE_AFTER_MS + 500, exchangeMs: T0 + STALE_AFTER_MS + 500 }),
   { use: true, reason: "takeover", started: false, prints: 2, massiveAgeMs: STALE_AFTER_MS + 500 }
 );
 
@@ -77,7 +76,7 @@ check("hand-back counts the prints it carried", handback?.prints, 2);
 
 check(
   "after the hand-back Finnhub is silent again",
-  admitFinnhub("AAPL", 100.11, { now: T0 + STALE_AFTER_MS + 1000 }),
+  admitFinnhub("AAPL", 100.11, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 }),
   { use: false, reason: "massive_current", massiveAgeMs: 100 }
 );
 
@@ -90,27 +89,32 @@ check(
   { use: false, reason: "stale_print", printAgeMs: MAX_PRINT_AGE_MS + 1, massiveAgeMs: STALE_AFTER_MS + 1000 }
 );
 check(
+  "a standby print with NO stamp is refused, never admitted on staleness alone",
+  admitFinnhub("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000 }),
+  { use: false, reason: "no_stamp", massiveAgeMs: STALE_AFTER_MS + 1000 }
+);
+check(
   "a standby print inside 60 s is used",
   admitFinnhub("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 - 5000 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1000 }
 );
 
-// 3 % deviation guard, against the last accepted price (here Massive's 50.00).
+// MAGNITUDE IS NOT A GATE (2026-11-09). A standby price at a new level is how a resumed
+// symbol is recovered; refusing it would refuse the halt resume the standby exists to carry.
+// These two prints are 20 % apart from Massive's 50.00 and both are used.
 reset();
 noteMassive("NVDA", 50, T0);
 check(
-  "a standby price more than 3 % away is refused",
-  admitFinnhub("NVDA", 60, { now: T0 + STALE_AFTER_MS + 1 }),
-  { use: false, reason: "deviation", deviation: 0.2, previous: 50, massiveAgeMs: STALE_AFTER_MS + 1 }
-);
-check(
-  "a standby price inside 3 % is used",
-  admitFinnhub("NVDA", 51.4, { now: T0 + STALE_AFTER_MS + 1 }),
+  "a standby price 20 % away is USED, not refused",
+  admitFinnhub("NVDA", 60, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1 }
 );
-
-check("deviation limit is 3 %", MAX_DEVIATION, 0.03);
-check("summary counts the refused prints", summary(T0 + STALE_AFTER_MS + 2).dropped.deviation, 1);
+check(
+  "the next standby print continues on the new level",
+  admitFinnhub("NVDA", 61, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
+  { use: true, reason: "takeover", started: false, prints: 2, massiveAgeMs: STALE_AFTER_MS + 1 }
+);
+check("no deviation counter remains", summary(T0 + STALE_AFTER_MS + 2).dropped.deviation, undefined);
 
 // ------------------------------------------------------------
 // PART 2 — SIMULATED MASSIVE DROPOUT
@@ -142,7 +146,7 @@ for (const step of steps) {
         : "primary feed")
     );
   } else {
-    const verdict = admitFinnhub("AAPL", step.price, { now: step.at });
+    const verdict = admitFinnhub("AAPL", step.price, { now: step.at, exchangeMs: step.at });
     console.log(
       `${clock(step.at)}  finnhub  ${step.price.toFixed(2)}  ` +
       (verdict.use
