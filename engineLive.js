@@ -119,9 +119,10 @@ export async function apply(ref, verdict) {
     return { applied: false, reason: "needs_budget" };
   }
 
-  // A HALTED ACCOUNT is decided and never written, whatever its switch row says. This
-  // is DART D's state until it is turned on: its ticks arrive here, the halt list
-  // answers "halted", and this branch is why nothing lands on the position.
+  // A HALTED ACCOUNT is decided and never written, whatever its switch row says. E is
+  // that account: its ticks arrive here, the halt list answers "halted", and this
+  // branch is why nothing lands on the position. D was reactivated 2026-11-09 and
+  // writes normally from then on.
   if (verdict.action === "halted") {
     stats.halted += 1;
     return { applied: false, reason: "halted" };
