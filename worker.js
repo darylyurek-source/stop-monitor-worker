@@ -492,7 +492,12 @@ async function fetchEngineSwitches() {
   });
   if (!res.ok) throw new Error(`getEngineSwitches HTTP ${res.status}`);
   const body = await res.json();
-  return Array.isArray(body?.switches) ? body.switches : [];
+  // The same answer carries the emergency flag, so one request per sync covers both
+  // questions: who owns each account, and whether a shutdown is in force.
+  return {
+    switches: Array.isArray(body?.switches) ? body.switches : [],
+    emergency: body?.emergency && body.emergency.active ? body.emergency : { active: false },
+  };
 }
 
 let engineAttached = "";
@@ -500,7 +505,12 @@ let engineAttached = "";
 async function applyEngineSwitches() {
   let switches = [];
   try {
-    switches = await fetchEngineSwitches();
+    const board = await fetchEngineSwitches();
+    switches = board.switches;
+    // EMERGENCY: Base44's switchboard answer decides whether this writer may touch a
+    // position at all. Active means it may not — the emergency liquidator owns the book.
+    // A failed read leaves the previous answer in place, which is the conservative one.
+    engineLive.setEmergency(board.emergency);
   } catch (err) {
     console.error(`[engine] switchboard unavailable (${err.message}) — engine idle, Base44 unaffected`);
     return;
