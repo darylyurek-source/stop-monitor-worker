@@ -132,15 +132,20 @@ export function assess({ conditions, participantMs, tapeMs } = {}) {
 //   1. IS IT A PRICE?      a finite positive number, from a source this file knows.
 //   2. WHAT IS IT?         its sale conditions (Massive only — Finnhub's codes are a
 //                          different namespace and are never read as if they were the SIP's).
-//   3. HOW OLD IS IT?      its own stamp against that source's limit. AGE, never MAGNITUDE:
-//                          no test in this file takes a price, so a halt resume 20 % away, an
-//                          opening gap and a news spike are all prices. The 3 % band stays
-//                          removed — it refused good prices and, worse, froze symbols.
+//   3. HOW OLD IS IT?      its own stamp against that source's limit. A price is never
+//                          REFUSED for being far from another price: a halt resume 20 %
+//                          away, an opening gap and a news spike are all prices.
 //   4. DOES THE TAPE MOVE BACKWARDS?  a print whose execution time sits further behind the
 //                          last accepted execution for that symbol than
 //                          REGRESSION_TOLERANCE_MS is a RE-PUBLICATION of an earlier trade,
 //                          whatever door it arrived on. This is the test that catches a
 //                          taped-late print on a path that carries no sale conditions.
+//   5. IS ITS DOOR THE RIGHT ONE?  while the stream is printing a symbol, a slower door may
+//                          not price it (MASSIVE_ACTIVE_MS / PREVAILING_MAX_AGE_MS).
+//   6. IS IT THE SAME MARKET?  a print far from the last ACCEPTED price may value a position
+//                          but may not close one until a second print agrees with it
+//                          (MAGNITUDE_JUMP_PCT / MAGNITUDE_WINDOW_MS). Quarantine, never
+//                          refusal, so a symbol can never freeze on a genuine move.
 //
 // Three answers, not two:
 //
@@ -168,8 +173,54 @@ export const SOURCE_LIMITS = Object.freeze({
 // Exchanges report the same instant in slightly different orders; minutes do not.
 export const REGRESSION_TOLERANCE_MS = 2000;
 
+// ---------------------------------------------------------------------------
+// TWO ADDITIONS, 2026-11-10 BEFORE THE OPEN (items 1 of the post-mortem)
+// ---------------------------------------------------------------------------
+// Measured on that morning's session: 21 of 23 fills sat outside Massive's own 1-minute
+// range for the minute they executed in. QNT closed at 41.34 while that minute traded
+// 42.01-42.42; ALMR at 31.71 against 30.90-31.05; OMH was OPENED at 21.30 at 09:40:07
+// while the 09:40 minute opened at 23.20. Every one of those is a price that is not the
+// present arriving at a door that let it through.
+//
+// The rule above ("age, never magnitude") is still right, and it is why nothing here
+// refuses a price for being far from another one: a halt resume, an opening gap and a
+// news spike are all prices. What it missed is that a price can be far from the tape AND
+// fresh, and that a slower door can serve a symbol the stream is actively printing.
+//
+//   5. THE CROSS-DOOR RULE. While Massive has printed this symbol inside
+//      MASSIVE_ACTIVE_MS, a slower door (snapshot, Finnhub standby, Finnhub quote) may
+//      only price it with a print no older than PREVAILING_MAX_AGE_MS. A 60 s-old standby
+//      quote on a symbol the stream is writing is not the market; it is the market minus
+//      whatever moved in that minute.
+//
+//   6. THE MAGNITUDE RULE — QUARANTINE, NEVER REFUSAL. A print more than
+//      MAGNITUDE_JUMP_PCT away from the last price this gate ACCEPTED, inside
+//      MAGNITUDE_WINDOW_MS, may value a position but may not close one. It becomes usable
+//      when a second print agrees with it (within the same percentage), which is how a
+//      genuine gap, halt resume or news spike clears — the second print confirms the new
+//      level and the anchor moves to it. A symbol can therefore never freeze: one agreeing
+//      print is all it takes, and the anchor only moves on a print the gate accepted.
+//
+// Neither rule sizes, prices or decides a trade. They answer "is this the present, on this
+// symbol" — the question whose absence produced that morning's fills.
+export const MASSIVE_ACTIVE_MS = 15000;
+export const PREVAILING_MAX_AGE_MS = 10000;
+export const MAGNITUDE_JUMP_PCT = 0.02;
+export const MAGNITUDE_WINDOW_MS = 60000;
+
 // symbol -> the latest execution time this gate has accepted. Ratchets forward only.
 const lastExecution = new Map();
+
+// symbol -> { price, atMs } of the last price this gate ACCEPTED (any door). A quarantined
+// outlier never moves it, so a bad print cannot become the reference the next one is judged by.
+const lastAccepted = new Map();
+
+// symbol -> ms of the last ACCEPTED Massive stream print, so the cross-door rule knows which
+// symbols the stream is actually writing.
+const lastMassiveAt = new Map();
+
+// symbol -> { price, atMs } of an outlier awaiting confirmation.
+const pendingJump = new Map();
 
 // Counted by tier, by source and by reason code, so a path that has started refusing
 // everything is visible in the heartbeat instead of looking like a quiet market.
@@ -193,12 +244,17 @@ export function gateSummary() {
       Object.entries(gateCounts.bySource).map(([k, v]) => [k, { ...v }])
     ),
     symbolsTracked: lastExecution.size,
+    symbolsAccepted: lastAccepted.size,
+    pendingJumps: pendingJump.size,
   };
 }
 
 // Test support only: forget every execution time and count this process has recorded.
 export function resetGate() {
   lastExecution.clear();
+  lastAccepted.clear();
+  lastMassiveAt.clear();
+  pendingJump.clear();
   gateCounts.use = 0;
   gateCounts.quarantine = 0;
   gateCounts.refuse = 0;
@@ -295,6 +351,47 @@ export function admitPrice({
       { executionMs }
     );
   }
+
+  // 5. THE CROSS-DOOR RULE. While the stream is printing this symbol, a slower door may not
+  //    price it: a 60 s-old standby quote on a symbol the stream is writing is the market
+  //    minus whatever moved in that minute, and it is what opened OMH 9 % from the book.
+  const massiveAt = lastMassiveAt.get(sym) || 0;
+  if (src !== "massive_stream" && nowMs - massiveAt <= MASSIVE_ACTIVE_MS && fresh.ageMs > PREVAILING_MAX_AGE_MS) {
+    return verdict(
+      "refuse",
+      "lagging_door",
+      `${src} price is ${(fresh.ageMs / 1000).toFixed(1)}s old while the stream is printing ${sym} (limit ${PREVAILING_MAX_AGE_MS / 1000}s)`,
+      { ageMs: fresh.ageMs, massiveAgeMs: nowMs - massiveAt }
+    );
+  }
+
+  // 6. THE MAGNITUDE RULE — quarantine, never refusal. A print far from the last ACCEPTED
+  //    price may value a position but may not close one until a second print agrees with it.
+  //    The anchor only moves on an accepted print, so an outlier cannot become the reference.
+  const anchor = lastAccepted.get(sym);
+  if (anchor && nowMs - anchor.atMs <= MAGNITUDE_WINDOW_MS) {
+    const movePct = Math.abs(numeric - anchor.price) / anchor.price;
+    if (movePct > MAGNITUDE_JUMP_PCT) {
+      const pending = pendingJump.get(sym);
+      const confirmed =
+        pending &&
+        nowMs - pending.atMs <= MAGNITUDE_WINDOW_MS &&
+        Math.abs(numeric - pending.price) / pending.price <= MAGNITUDE_JUMP_PCT;
+      if (!confirmed) {
+        pendingJump.set(sym, { price: numeric, atMs: nowMs });
+        return verdict(
+          "quarantine",
+          "magnitude_jump",
+          `${numeric} is ${(movePct * 100).toFixed(1)}% from the last accepted ${anchor.price} — may value a position, may not close one until a second print agrees`,
+          { movePct, anchorPrice: anchor.price }
+        );
+      }
+    }
+  }
+
+  lastAccepted.set(sym, { price: numeric, atMs: nowMs });
+  pendingJump.delete(sym);
+  if (src === "massive_stream") lastMassiveAt.set(sym, nowMs);
 
   return verdict("use", null, null, { ageMs: fresh.ageMs, executionMs });
 }

@@ -14,6 +14,9 @@
 // Part 4 — a re-publication is refused by the monotonic tape test even with no conditions.
 // Part 5 — one symbol's refusal never touches another's.
 // Part 6 — the counters the heartbeat reads actually move.
+// Part 7 — the two rules added 2026-11-10: a slower door may not price a symbol the stream is
+//          printing, and a print far from the last accepted one is QUARANTINED (may value, may
+//          not close) until a second print agrees — never refused, so a symbol cannot freeze.
 //
 // Deterministic: every call is given its own clock. No clock, no network, no socket.
 // Exit code 0 = the gate may stand in front of every door.
@@ -301,6 +304,92 @@ const summary = gateSummary();
 check("the heartbeat sees the refusal", summary.refuse, 1);
 check("and knows why", summary.byCode.extended_hours, 1);
 check("and from which door", summary.bySource.massive_stream.refuse, 1);
+
+// ------------------------------------------------------------
+// PART 7 — THE TWO RULES ADDED 2026-11-10 BEFORE THE OPEN
+// ------------------------------------------------------------
+// Measured that morning: 21 of 23 fills sat outside Massive's own 1-minute range for the
+// minute they executed in. QNT closed at 41.34 while the minute traded 42.01-42.42. The
+// answer is not a refusal — a refusal freezes a symbol, and a halt resume really is 20 %
+// away — it is a quarantine that ONE agreeing print clears.
+console.log("\n— Part 7: cross-door and magnitude —");
+resetGate();
+
+const at = (sec) => SESSION + sec * 1000;
+const print = (over) => admitPrice({ nowMs: at(over.sec ?? 0), ...over });
+
+check(
+  "the first print for a symbol is used — there is no reference to judge it against yet",
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 })),
+  ["use", null]
+);
+
+check(
+  "a 20 % jump on the next print is QUARANTINED, not refused (it may value, not close)",
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  ["quarantine", "magnitude_jump"]
+);
+
+check(
+  "a second print agreeing with it CLEARS it — the anchor moves, the symbol is not frozen",
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120.4, stampMs: at(2), conditions: [37], participantMs: at(2), sec: 2 })),
+  ["use", null]
+);
+
+check(
+  "an ordinary print against the new anchor is used at once",
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 121, stampMs: at(3), conditions: [37], participantMs: at(3), sec: 3 })),
+  ["use", null]
+);
+
+// The realistic lag shape: the stream printed 12 s ago and has been quiet since, and the
+// standby now offers a print that is 12 s old — fresh by its own 60 s limit, but not the market
+// the stream already showed. The monotonic test cannot catch it (the execution time does not
+// walk back), which is exactly why the cross-door rule exists.
+resetGate();
+print({ source: "massive_stream", symbol: "DOOR", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+
+check(
+  "while the stream is live on the symbol, a 12 s-old standby print is REFUSED",
+  tierCode(print({ source: "finnhub_stream", symbol: "DOOR", price: 101, stampMs: at(0), sec: 12 })),
+  ["refuse", "lagging_door"]
+);
+
+check(
+  "a FRESH print from that same standby door is used",
+  tierCode(print({ source: "finnhub_stream", symbol: "DOOR", price: 100.4, stampMs: at(12), sec: 12 })),
+  ["use", null]
+);
+
+// A symbol the stream printed once and then left alone: the standby's 10 s-old print is
+// admitted, because the stream is no longer the one pricing that symbol.
+print({ source: "massive_stream", symbol: "QUIET", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+check(
+  "once the stream has been quiet past MASSIVE_ACTIVE_MS, the slower door may price the symbol",
+  tierCode(print({ source: "finnhub_stream", symbol: "QUIET", price: 100.5, stampMs: at(6), sec: 16 })),
+  ["use", null]
+);
+
+check(
+  "a quarantined outlier never becomes the anchor — the real price is still the reference",
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 122, stampMs: at(24), conditions: [37], participantMs: at(24), sec: 24 })),
+  ["use", null]
+);
+
+resetGate();
+print({ source: "massive_stream", symbol: "QNTX", price: 42.2, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+check(
+  "the 2026-11-10 QNT fill (41.34 against a 42.2 book) is quarantined, not filled",
+  tierCode(print({ source: "massive_stream", symbol: "QNTX", price: 41.34, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  ["quarantine", "magnitude_jump"]
+);
+check("and the heartbeat counts it", gateSummary().byCode.magnitude_jump, 1);
+
+check(
+  "an unknown symbol's first print is unaffected by another symbol's quarantine",
+  tierCode(print({ source: "massive_stream", symbol: "OTHER", price: 5, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  ["use", null]
+);
 
 console.log(
   failures === 0

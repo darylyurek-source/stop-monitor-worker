@@ -86,15 +86,21 @@ let MASSIVE_API_KEY = String(process.env.MASSIVE_API_KEY || "").trim();
 let PRICE_FEED = "finnhub";
 
 function resolveFeedMode() {
-  const requested = String(process.env.PRICE_FEED || "finnhub").toLowerCase();
-  if (requested === "finnhub") return "finnhub";
+  // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10) — ONE FEED, NO CHOICE.
+  //
+  // PRICE_FEED is deliberately no longer read. While a service's environment could say
+  // "finnhub", what the engine decided on depended on a setting nobody could see from the
+  // app, and a redeploy could silently change the source of every fill. The feed is now
+  // Massive, unconditionally.
+  //
+  // If there is no key there is no feed, and the worker logs that and routes nothing: a
+  // symbol with no tick cannot be filled, which is the correct outcome. It does NOT fall
+  // back to another vendor.
   if (!MASSIVE_API_KEY) {
-    console.error(`[feed] PRICE_FEED=${requested} but no MASSIVE_API_KEY is available — staying on finnhub`);
-    return "finnhub";
+    console.error("[feed] no MASSIVE_API_KEY — no price feed; nothing will be routed");
+    return "off";
   }
-  if (requested === "massive") return "massive";
-  if (requested === "massive-shadow") return "massive-shadow";
-  return "finnhub";
+  return "massive";
 }
 
 // Resolve the bridge connection at startup: from this service's own environment when
@@ -187,10 +193,10 @@ async function resolveMassiveKey() {
   }
 }
 
-if (!FINNHUB_API_KEY || !BASE44_APP_URL || !BASE44_API_KEY) {
-  console.error(
-    "Missing required environment variables. Need FINNHUB_API_KEY, BASE44_APP_URL, BASE44_API_KEY."
-  );
+// FINNHUB_API_KEY is no longer required (2026-11-10): Finnhub is out of the price equation,
+// so a service without that secret still starts and routes Massive's prices.
+if (!BASE44_APP_URL || !BASE44_API_KEY) {
+  console.error("Missing required environment variables. Need BASE44_APP_URL, BASE44_API_KEY.");
   process.exit(1);
 }
 
@@ -285,13 +291,14 @@ function rejectStreamPrint(symbol, price, reason, tag = "stream") {
 //
 //   { inFlight: boolean, pending: { ref, symbol, price } | null }
 //
-// ONE SLOT, LATEST PRICE WINS. A price arriving while that position's previous
-// request is still in flight is kept - it overwrites the single pending slot -
-// and is processed the moment the in-flight request settles. No price is ever
-// discarded, so the newest price is always the one the handler decides on, and a
-// stop crossing is seen after one request round-trip instead of being skipped
-// while a request is busy. Every position has its own mailbox, so a slow handler
-// in one system never holds up another system's ticks.
+// ONE SLOT, THE FIRST PRICE OF THE WAVE WINS (2026-11-10). A price arriving while that
+// position's previous request is still in flight is kept and processed the moment the
+// in-flight request settles, so a stop crossing is seen after one request round-trip
+// instead of being skipped. Later prints that arrive while a price is already waiting are
+// superseded by it: that first print is the one the whole wave acts on, which is what makes
+// two accounts holding the same stock decide on the same price instead of one of them
+// taking a newer print a moment later. Every position has its own mailbox, so a slow
+// handler in one system never holds up another system's ticks.
 //
 // This changes WHEN a price reaches the handler, never the price itself and never
 // a trading rule: no threshold, no slippage, no fill level and no P&L is
@@ -678,15 +685,21 @@ function mailboxFor(positionId) {
 }
 
 // Hand one price to one position. If that position has nothing in flight the
-// price starts processing immediately; otherwise it takes the single pending
-// slot, replacing whatever was waiting there (latest price wins). The replaced
-// price is not lost work - it is an older price for the same position, and the
-// newer one carries everything the handler needs to decide.
+// price starts processing immediately; otherwise it takes the single pending slot.
+//
+// FIRST PRICE OF THE WAVE WINS (2026-11-10). The slot used to be overwritten by every
+// later print, so two systems holding the same stock decided on different prices:
+// measured that morning, DART B closed OMH at 24.52 while DART C closed the same stock
+// 90 ms later at 24.18 — the same position, two prices, because C's mailbox was busy and
+// took the newer print. The first price that arrives while a position is busy is the
+// print the whole wave acted on, so every account now decides on that one. A price that
+// arrives while a price is already waiting is a later print for the same position and is
+// superseded: the waiting print is the one this wave is being decided on.
 function deliverTick(ref, symbol, price) {
   const m = mailboxFor(ref.positionId);
 
   if (m.inFlight) {
-    m.pending = { ref, symbol, price };
+    if (!m.pending) m.pending = { ref, symbol, price };
     return;
   }
 
@@ -801,7 +814,15 @@ async function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
       return;
     }
     if (verdict.tier === "quarantine") {
-      await confirmUnprovenanced(symbol, price, verdict);
+      // A print with no execution stamp is REPLACED by a snapshot judged by this same gate.
+      // A print that is merely far from the tape (magnitude_jump) is not replaced: it is
+      // dropped from routing and counted, and the next print decides. A second print agreeing
+      // with it clears the quarantine inside the gate, so no symbol can freeze on a real move.
+      if (verdict.code === "no_execution_stamp") {
+        await confirmUnprovenanced(symbol, price, verdict);
+        return;
+      }
+      rejectStreamPrint(symbol, price, verdict.reason, "gate");
       return;
     }
 
@@ -896,6 +917,12 @@ function wsSend(message) {
 }
 
 function connectWebSocket() {
+  // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10). No Finnhub socket is opened in any
+  // mode: no primary stream, no warm standby, no takeover hand-back, no reconnect ladder.
+  // The function is kept so every call site still works, and so the socket can be restored
+  // from the commit before this one. Massive is the one feed.
+  return;
+
   // In finnhub mode this socket routes every tick. In massive mode it is the WARM
   // STANDBY: one socket with every open symbol subscribed, its prices used only for a
   // symbol Massive has gone quiet on. The one-socket rule is identical in both modes.
@@ -1103,34 +1130,11 @@ async function pollQuietSymbols() {
         }
       }
 
-      if (!massivePrimary || price == null) {
-        const res = await fetch(
-          `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${FINNHUB_API_KEY}`
-        );
-
-        if (!res.ok) continue;
-
-        const q = await res.json();
-        // q.t is when the quote was last updated (epoch seconds), and it is the ONLY thing that
-        // says the quote describes the present. A quote without it, or an old one, is refused:
-        // its `c` would be a dead tape's close valued as a live price. AGE ONLY, never
-        // magnitude — and the limit now comes from the gate, not from this file.
-        const quoteTs = numberOrNull(q && q.t);
-        const quotePrice = numberOrNull(q && q.c);
-        const verdict = tradeConditions.admitPrice({
-          source: "finnhub_quote",
-          symbol,
-          price: quotePrice,
-          stampMs: quoteTs ? quoteTs * 1000 : null,
-        });
-        if (verdict.tier !== "use") {
-          console.warn(`[quote] ${symbol} REJECTED — ${verdict.reason}`);
-          continue;
-        }
-        price = quotePrice;
-        exchangeMs = quoteTs ? quoteTs * 1000 : null;
-        fromFinnhub = massivePrimary;
-      }
+      // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10). This quiet-symbol fallback used to
+      // ask Finnhub for a quote whenever Massive's snapshot had nothing. With Finnhub removed
+      // there is exactly one source: if Massive cannot put a current price on the symbol, that
+      // symbol gets no tick — and the session sweep still closes it from Massive's own price
+      // at the close. No second vendor, no last resort.
 
       if (fromFinnhub) {
         if (price && price > 0 && standbyAdmits(symbol, price, exchangeMs)) {
@@ -1167,8 +1171,11 @@ async function pollQuietSymbols() {
 const closePriceResolver = makeClosePriceResolver({
   lastPrice,
   lastTick,
-  fetchSnapshot: (symbol) => (PRICE_FEED === "massive" ? massiveFeed.snapshotPrice(symbol) : null),
-  fetchQuote: (symbol) => quoteFromFinnhub(symbol, FINNHUB_API_KEY),
+  fetchSnapshot: (symbol) => massiveFeed.snapshotPrice(symbol),
+  // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10): the close asks Massive and nothing
+  // else. With no current Massive price the resolver falls through to its labelled stale
+  // case instead of borrowing a quote from a second vendor.
+  fetchQuote: () => null,
 });
 
 // ------------------------------------------------------------
