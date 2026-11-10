@@ -153,20 +153,19 @@ export const SYSTEM_PARTIAL_PROFIT = {
   E: { threshold: 1500, fraction: 0.5 },
 };
 
-// THE +$2,000 AUTO-ARM — DART B's rule from 2026-11-09, before that Monday's open,
-// and DART A's (ANEW) from the same date at the owner's direction. It was DART C's
-// from 2026-11-06 and was MOVED to B on 2026-11-07, which makes C the control: C arms
-// on the Vector test only, at B's original 55/65. Nothing else changed anywhere.
+// THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
+// DART D (B's rule set from 2026-11-08) and DART C (restored 2026-11-10, at the owner's
+// direction: C is B's rule set with ONE difference only — no profit-protection sale —
+// so it arms exactly as B does). DART E, halted, has none.
 //
 // The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
 // automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
-// position can still arm earlier on deterioration. A, B and D have the row (identical,
-// +$2,000 — D carries B's whole rule set from 2026-11-08); C and E have none and their
-// single comparison is a no-op.
+// position can still arm earlier on deterioration. E's single comparison is a no-op.
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
   D: 2000,
+  C: 2000, // 2026-11-10: C matches B everywhere except its absent profit-protection sale
 };
 
 export function autoArmPolicy(system) {
@@ -200,9 +199,9 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  // DART C moved to B's 55/65 on 2026-11-06 and lost the +$2,000 auto-arm on
-  // 2026-11-09: C now runs B's ORIGINAL rule set exactly — the Vector test only —
-  // and is the control B is measured against.
+  // DART C moved to B's 55/65 on 2026-11-06. From 2026-11-10 it runs B's rule set
+  // with one difference only — no profit-protection sale — so it arms here and at
+  // the +$2,000 auto-arm exactly as B does.
   C: B_RULE_SET,
   // DART D was rebuilt as an exact copy of DART B on 2026-11-08 and moved from its
   // own 65/85 row to B's 55/65 set. D is halted.

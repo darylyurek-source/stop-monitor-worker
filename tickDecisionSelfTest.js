@@ -194,8 +194,10 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
 check("B arms its $350 stop at +$2,000", autoArmPolicy("B"), 2000);
-check("C is the control — no automatic arming", autoArmPolicy("C"), null);
+check("C arms at +$2,000 like B (its only difference is the absent partial sale)", autoArmPolicy("C"), 2000);
 check("D carries B's auto-arm, E does not", [autoArmPolicy("ANEW"), autoArmPolicy("D"), autoArmPolicy("E")], [2000, 2000, null]);
+check("B sells 25% once at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
+check("C never sells partially", partialProfitPolicy("C"), null);
 // C's Vector test must stay B's original 55/65, and B's own must be untouched.
 check(
   "B and C arm the Vector test identically",
