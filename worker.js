@@ -239,9 +239,11 @@ const CONNECTION_STABLE_MS = 60000;
 // tick processing - its mailbox still drains with its latest pending price.
 const TICK_TIMEOUT_MS = 15000;
 
-// REST /quote fallback for symbols that haven't ticked on the WebSocket.
-const POLL_LOOP_MS = 3000;
-const QUIET_TICK_MS = 8000;
+// NO RECOVERY POLL (2026-11-10). Nothing here asks a second door for a price on a symbol
+// whose stream has gone quiet. A quiet symbol has no price until its own next print, and the
+// NO-ACCEPTED-PRICE alarm names it. The snapshot door this replaced was the source of the
+// phantom fills, not a treatment for them: measured at 09:58 ET it left a held position
+// unpriced for a stretch while the recovery loop kept discarding its own answers.
 
 // symbol -> Array<{ positionId, handler, system }>
 const symbolPositions = new Map();
@@ -790,8 +792,9 @@ function standbySubscriptions() {
 //                 it does not describe the present. Dropped without touching the book; the
 //                 next print decides.
 //   quarantine  — fresh, but with NO execution stamp (no pt, no trft): nothing on the tape
-//                 says when it traded. It may value a position; it may not close one. It is
-//                 replaced by a snapshot judged by this same gate (confirmUnprovenanced).
+//                 says when it traded. It may value a position; it may not close one. There
+//                 is no substitute price behind it any more: it is dropped, counted, and the
+//                 symbol's next print decides.
 //   use         — adopted exactly as before.
 //
 // HOW FAR THE PRICE MOVED IS NOT A QUESTION HERE. No test in the gate takes a price, so a
@@ -814,14 +817,12 @@ async function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
       return;
     }
     if (verdict.tier === "quarantine") {
-      // A print with no execution stamp is REPLACED by a snapshot judged by this same gate.
-      // A print that is merely far from the tape (magnitude_jump) is not replaced: it is
-      // dropped from routing and counted, and the next print decides. A second print agreeing
-      // with it clears the quarantine inside the gate, so no symbol can freeze on a real move.
-      if (verdict.code === "no_execution_stamp") {
-        await confirmUnprovenanced(symbol, price, verdict);
-        return;
-      }
+      // NO SUBSTITUTE PRICE (2026-11-10). A quarantined print may value a position but may
+      // never close one, and the snapshot that used to stand in for it is gone. Whether the
+      // quarantine came from a missing execution stamp or from a jump away from the tape, the
+      // print is dropped from routing and counted, and the symbol's next print decides. A
+      // second print agreeing with a magnitude jump clears that quarantine inside the gate, so
+      // no symbol can freeze on a real move.
       rejectStreamPrint(symbol, price, verdict.reason, "gate");
       return;
     }
@@ -832,40 +833,12 @@ async function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
   }
 }
 
-// A fresh print with no execution stamp cannot be trusted to close a position — but neither
-// may it be ignored, because a symbol with no price has no stop and no close. So it is
-// REPLACED by a price the same gate accepts: one snapshot, whose last trade carries its own
-// stamp and its own conditions. With no such price the print is dropped, counted, and the next
-// print decides — never a fill at a price nothing on the tape confirmed, and never a silent
-// pass either way.
-async function confirmUnprovenanced(symbol, price, verdict) {
-  // If a newer print is admitted for this symbol while the snapshot is in flight, that print
-  // has already decided — a corroborating price must never overwrite a newer one.
-  const before = lastTick.get(symbol);
-  const snapshot = await massiveFeed.snapshotTick(symbol);
-  if (lastTick.get(symbol) !== before) return;
-  if (!snapshot) {
-    rejectStreamPrint(symbol, price, `${verdict.reason}; no corroborating snapshot`);
-    return;
-  }
-
-  const confirmed = tradeConditions.admitPrice({
-    source: "massive_snapshot",
-    symbol,
-    price: snapshot.price,
-    stampMs: snapshot.stampMs,
-    conditions: snapshot.conditions,
-  });
-  if (confirmed.tier !== "use") {
-    rejectStreamPrint(symbol, price, `${verdict.reason}; snapshot ${confirmed.reason}`);
-    return;
-  }
-
-  console.log(
-    `[gate] ${symbol} unprovenanced print ${fmt(price)} replaced by snapshot ${fmt(snapshot.price)}`
-  );
-  adoptMassivePrice(symbol, snapshot.price, snapshot.stampMs);
-}
+// REMOVED (2026-11-10): confirmUnprovenanced. It answered an unstamped print by borrowing a
+// snapshot from the same provider and routing that instead — a second door onto the tick path
+// for exactly the prints the gate had just refused to trust. Nothing replaces it: an unstamped
+// print is dropped, counted in the gate's byCode, and the symbol's next provenanced print
+// decides. A held position with no accepted price is alarmed by the NO-ACCEPTED-PRICE line in
+// the heartbeat, which is the honest signal, instead of being fed a price by another route.
 
 // A Massive price that has ALREADY been validated — by the gate, on whichever door it came
 // through. Books it as current (ending any Finnhub takeover) and
@@ -1080,82 +1053,23 @@ function scheduleReconnect(rateLimited = false) {
 
 
 // ------------------------------------------------------------
-// REST /quote FALLBACK FOR QUIET SYMBOLS
+// NO QUIET-SYMBOL RECOVERY (REMOVED 2026-11-10)
 //
-// Finnhub's WebSocket only emits a tick when a trade prints.
-// For any tracked symbol that hasn't ticked in QUIET_TICK_MS,
-// pull a price from REST /quote and run the same routing.
+// pollQuietSymbols used to run every three seconds and, for any open symbol whose stream had
+// been silent for eight seconds, fetch a snapshot and route it as a tick. It was the single
+// largest source of refused prices in the log — 296 of the last 300 refusal lines were this
+// loop being told its snapshot was older than the stream print it was trying to replace — and
+// it still could not supply a price when the market genuinely had none: at 09:58 ET on
+// 2026-11-10 a held position sat unpriced through the whole loop and was logged NO ACCEPTED
+// PRICE anyway.
+//
+// It is gone. The trading path now has exactly ONE source: Massive's own stream print, judged
+// by tradeConditions.admitPrice. If a symbol is not printing, it has no price — and the
+// heartbeat's NO-ACCEPTED-PRICE line names it, which is a state to act on rather than a price
+// to invent. The 16:00 session close still asks the market for a closing price (closeQuote.js),
+// because an exit at the close must be priced from that moment; that is the one remaining
+// fetch and it is age-checked and labelled, never routed as a tick.
 // ------------------------------------------------------------
-
-async function pollQuietSymbols() {
-  // Nothing is open (off-hours, weekend or holiday) — there is nothing to poll.
-  if (symbolPositions.size === 0) return;
-
-  const now = Date.now();
-
-  for (const symbol of symbolPositions.keys()) {
-    const last = lastTick.get(symbol) || 0;
-
-    if (now - last < QUIET_TICK_MS) continue;
-
-    try {
-      // In Massive mode the fallback is Massive's own snapshot, which has no
-      // per-minute ceiling; every other mode keeps Finnhub's quote exactly as before.
-      // If Massive cannot answer at all, Finnhub's quote is the standby's last resort and
-      // goes through the same standby gate (15 s silence, 60 s print age, no magnitude).
-      const massivePrimary = PRICE_FEED === "massive";
-      let price = null;
-      let exchangeMs = null;
-      let fromFinnhub = false;
-
-      if (massivePrimary) {
-        // The snapshot is judged by the SAME gate as a stream print — its own trade stamp for
-        // freshness, its own sale conditions, and the same monotonic tape test. Recovering a
-        // quiet symbol is precisely where a re-published old print used to slip in unjudged.
-        const snapshot = await massiveFeed.snapshotTick(symbol);
-        if (snapshot) {
-          const verdict = tradeConditions.admitPrice({
-            source: "massive_snapshot",
-            symbol,
-            price: snapshot.price,
-            stampMs: snapshot.stampMs,
-            conditions: snapshot.conditions,
-          });
-          if (verdict.tier === "use") {
-            price = snapshot.price;
-            exchangeMs = snapshot.stampMs;
-          } else {
-            console.warn(`[quote] ${symbol} REJECTED — snapshot ${verdict.reason}`);
-          }
-        }
-      }
-
-      // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10). This quiet-symbol fallback used to
-      // ask Finnhub for a quote whenever Massive's snapshot had nothing. With Finnhub removed
-      // there is exactly one source: if Massive cannot put a current price on the symbol, that
-      // symbol gets no tick — and the session sweep still closes it from Massive's own price
-      // at the close. No second vendor, no last resort.
-
-      if (fromFinnhub) {
-        if (price && price > 0 && standbyAdmits(symbol, price, exchangeMs)) {
-          routeTick(symbol, price, exchangeMs, "finnhub");
-        }
-        continue;
-      }
-
-      if (price && price > 0) {
-        // NO MAGNITUDE TEST. This path exists to recover a symbol whose stream went quiet,
-        // and a quiet symbol is often one that halted and resumed somewhere else entirely —
-        // a band here would refuse the very resume it was built to carry. Age was checked
-        // above; any large move is reported by noteLargeMove, never refused.
-        if (massivePrimary) adoptMassivePrice(symbol, price, exchangeMs);
-        else routeTick(symbol, price, exchangeMs);
-      }
-    } catch (err) {
-      console.error(`[quote] ${symbol} error:`, err.message);
-    }
-  }
-}
 
 
 // ------------------------------------------------------------
@@ -1167,7 +1081,9 @@ async function pollQuietSymbols() {
 // ------------------------------------------------------------
 
 // Built from the router's own maps so the close can judge a price's AGE rather than trusting
-// it. The policy (ask the market first, label and count a stale fallback) is in closeQuote.js.
+// it. The policy (ask the market once at the close, label and count a stale fallback) is in
+// closeQuote.js. This is the ONLY place a Massive snapshot still prices anything, and it
+// prices a closing exit — not a tick, not a stop, not a press, not an entry.
 const closePriceResolver = makeClosePriceResolver({
   lastPrice,
   lastTick,
@@ -1261,8 +1177,6 @@ async function start() {
   }
   scheduleSync();
 
-  // Catch events on quiet symbols.
-  setInterval(pollQuietSymbols, POLL_LOOP_MS);
 
   // THE SESSION END DOES NOT WAIT FOR A TRADE (2026-11-09). Every exit — the 16:00 close
   // included — is decided inside decideTick, which runs only when a price arrives, and for a

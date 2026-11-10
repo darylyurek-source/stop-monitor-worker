@@ -150,11 +150,12 @@ export function assess({ conditions, participantMs, tapeMs } = {}) {
 // Three answers, not two:
 //
 //   use        fresh and provenanced — valued, rules evaluated, presses and exits written.
-//   quarantine fresh but with NO execution stamp (no pt, no trft). It may value a position;
-//              it may not close one. The worker replaces it with a corroborating snapshot
-//              judged by this same gate (worker.js confirmUnprovenanced). A fresh print with
-//              nothing to judge it is never silently admitted — and never silently dropped
-//              either, because a symbol with no price has no stop and no close.
+//   quarantine fresh but with NO execution stamp (no pt, no trft), or far enough from the last
+//              accepted price that it needs agreement. It may value a position; it may not
+//              close one. Since 2026-11-10 the worker no longer substitutes a snapshot for it
+//              (confirmUnprovenanced is gone): it is dropped and counted, and the symbol's
+//              next provenanced print decides. A fresh print with nothing to judge it is never
+//              silently admitted — and never silently passed as a price either.
 //   refuse     dropped and counted. The book is untouched; the next print decides.
 //
 // Nothing here sizes, prices, or decides a trade. It answers what a price IS.
