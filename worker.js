@@ -49,6 +49,7 @@ import { configure as configureBridge } from "./bridge.js";
 import * as massiveFeed from "./massiveFeed.js";
 import * as standby from "./feedStandby.js";
 import * as tradeConditions from "./tradeConditions.js";
+import * as priceIncidents from "./priceIncidents.js";
 import { runSessionClose, CLOSE_SWEEP_INTERVAL_MS } from "./closeSweep.js";
 import { makeClosePriceResolver, finnhubQuote as quoteFromFinnhub, CLOSE_MAX_PRICE_AGE_MS } from "./closeQuote.js";
 import { verifyDatabase } from "./dbVerify.js";
@@ -1120,7 +1121,12 @@ async function start() {
     console.log("[worker] SIGTERM — releasing price feeds before exit");
     try { massiveFeed.shutdown(); } catch (_) {}
     try { if (ws) { ws.removeAllListeners(); ws.terminate(); } } catch (_) {}
-    process.exit(0);
+    // Write any buffered price-integrity rows before this process disappears, so a
+    // redeploy cannot drop the history it was holding.
+    Promise.resolve()
+      .then(() => priceIncidents.flush())
+      .catch(() => {})
+      .finally(() => process.exit(0));
   });
 
   // Resolve the bridge credentials FIRST, so the verification below and the engine's
@@ -1134,6 +1140,22 @@ async function start() {
   // Hand the same market-data key to the candle series so it can seed the full
   // session from the provider rather than the afternoon-only archive.
   configureCandles(MASSIVE_API_KEY);
+
+  // PERMANENT PRICE-INTEGRITY HISTORY (2026-11-10). The gate reports every price it
+  // refuses or quarantines to priceIncidents, which appends it to a memory buffer and
+  // writes it to PostgreSQL in batches every five seconds — so the history survives
+  // restarts without a database round trip anywhere on the tick path. The observer is a
+  // bystander: it cannot change a verdict, a threshold or an exit, and if the bridge is
+  // down the rows are dropped and counted rather than slowing a tick.
+  priceIncidents.configure({
+    systemsFor: (symbol) => (symbolPositions.get(String(symbol)) || []).map((ref) => ref.system),
+  });
+  tradeConditions.setVerdictObserver((verdict) => priceIncidents.record(verdict));
+  console.log(
+    `[incidents] price-integrity history → PriceRejection (PostgreSQL), batches of 500 every ` +
+    `${5000 / 1000}s, run ${priceIncidents.stats().run}` +
+    (priceIncidents.startFlusher() ? "" : " — flusher NOT started (bridge not configured)")
+  );
 
   // Read-only database identity check. Deliberately NOT awaited: it must never
   // delay the first tick or the position sync, and it can never throw.
@@ -1220,6 +1242,16 @@ async function start() {
       `[gate] use=${gate.use} quarantine=${gate.quarantine} refuse=${gate.refuse}` +
       (codes.length ? ` (${codes.map(([code, n]) => `${code}=${n}`).join(", ")})` : "")
     );
+    // The history's own counters, beside the gate's: how many verdicts this process
+    // recorded, how many reached PostgreSQL, and how many were dropped.
+    const incidents = priceIncidents.stats();
+    console.log(
+      `[incidents] recorded=${incidents.recorded} written=${incidents.written} ` +
+      `buffered=${incidents.buffered} dropped=${incidents.dropped} errors=${incidents.errors}` +
+      (incidents.last_flush_at ? ` last_flush=${incidents.last_flush_at}` : "") +
+      (incidents.last_error ? ` last_error=${incidents.last_error}` : "")
+    );
+
     const silent = [...symbolPositions.keys()].filter((s) => {
       const at = lastTick.get(s) || 0;
       return !at || Date.now() - at > SILENT_SYMBOL_ALERT_MS;

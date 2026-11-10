@@ -227,6 +227,18 @@ const pendingJump = new Map();
 // everything is visible in the heartbeat instead of looking like a quiet market.
 const gateCounts = { use: 0, quarantine: 0, refuse: 0, byCode: {}, bySource: {} };
 
+// MONITORING OBSERVER (2026-11-10). A bystander, never a rule: when the worker sets one,
+// it is handed every refused or quarantined verdict so the incident can be written to
+// permanent history (priceIncidents.js). It is called synchronously, it may not await,
+// and its failure is swallowed here — so a database outage can never change a verdict,
+// a threshold, a price or an exit. An accepted price is not reported: there is nothing
+// to investigate about a price the gate admitted.
+let verdictObserver = null;
+
+export function setVerdictObserver(fn) {
+  verdictObserver = typeof fn === "function" ? fn : null;
+}
+
 function countVerdict(tier, source, code) {
   gateCounts[tier] += 1;
   const per = gateCounts.bySource[source] || { use: 0, quarantine: 0, refuse: 0 };
@@ -288,7 +300,26 @@ export function admitPrice({
 
   const verdict = (tier, code, reason, extra) => {
     countVerdict(tier, src, code);
-    return { tier, code, reason, source: src, symbol: sym, ...extra };
+    const result = {
+      tier,
+      code,
+      reason,
+      source: src,
+      symbol: sym,
+      // The price and the provider's own stamp travel on the verdict so the monitoring
+      // observer can record exactly what was refused. Nothing reads them to decide.
+      price: Number.isFinite(Number(price)) ? Number(price) : null,
+      printMs: Number(stampMs) > 0 ? Number(stampMs) : null,
+      ...extra,
+    };
+    if (tier !== "use" && verdictObserver) {
+      try {
+        verdictObserver(result);
+      } catch (_) {
+        // An observer can never change a verdict.
+      }
+    }
+    return result;
   };
 
   // 1. IS IT A PRICE, FROM A DOOR WE KNOW?
