@@ -139,14 +139,17 @@ export function systemStop(system) {
   return Number.isFinite(Number(v)) ? Number(v) : STOP;
 }
 
-// cloneSystems.ts — partial profit-taking. A and B have NO row and therefore never
-// sell partially: one comparison, no-op.
+// cloneSystems.ts — partial profit-taking. DART A has NO row and therefore never sells
+// partially: one comparison, no-op. DART B's row was ADDED on 2026-11-10, before the
+// open, at the owner's direction — 25% of the position, once, at +$1,850. It is the
+// same number Base44 resolves, so the two engines cannot part company on it.
 // DART C's row was REMOVED on 2026-11-06 (before the open): C runs B's rules with no
 // partial sale at all.
 // DART D's row was REMOVED on 2026-11-08 when D was rebuilt as an exact copy of B: D
 // never sells partially and holds every position to its own exits. E keeps its row
 // (+$1,500, 50%) because E is D's copy of 2026-10-30 and is halted.
 export const SYSTEM_PARTIAL_PROFIT = {
+  B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
   E: { threshold: 1500, fraction: 0.5 },
 };
 

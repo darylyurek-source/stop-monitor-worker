@@ -52,7 +52,7 @@ check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), pres
 check("hard stop per system", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -1700]);
 check("protective policy BN vs CD", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 55, 65, 350]);
 check("D runs B's 55/65 rule set and D's press is +$150", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 150, true]);
-check("partial profit only E (C 2026-11-06, D 2026-11-08, A and B never)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E").threshold], [null, null, null, null, 1500]);
+check("partial profit only B (+$1,850) and E (C 2026-11-06, D 2026-11-08, A never)", [partialProfitPolicy("A"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E").threshold], [null, { threshold: 1850, fraction: 0.25 }, null, null, 1500]);
 
 // --- 1. HARD STOP (A) ---------------------------------------------------------
 // long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
@@ -86,9 +86,31 @@ check("D under the $20,000 floor skips", tick("D", pos(), 101, { halted: false, 
 const t4 = tick("ANEW", pos(), 110, { vectorScore: 30 });
 check("A never sells partially", [t4.action, t4.event, t4.grid_level], ["grid", "vector_profit_activate", 900]);
 
-// --- 5. UPSIDE VECTOR EXIT (B, score 70 at activation) ------------------------
-const t5 = tick("B", pos(), 110, { vectorScore: 70 });
-check("upside Vector exit", [t5.action, t5.event, t5.vector_level, t5.gross_pl, t5.net_pl], ["exit", "vector_profit_exit", 900, 2000, 1996.42]);
+// --- 5. UPSIDE VECTOR EXIT (ANEW, score 70 at activation) --------------------
+// A (ANEW) carries no partial-profit rule, so the +$900 grid is what decides here.
+const t5 = tick("ANEW", pos(), 105, { vectorScore: 70 });
+check("upside Vector exit", [t5.action, t5.event, t5.vector_level], ["exit", "vector_profit_exit", 900]);
+
+// --- 5b. B'S 25% SALE AT +$1,850 (added 2026-11-10, at the owner's direction) --
+// The same position at +$2,000 sells a quarter of its 200 shares before anything
+// else: 50 shares at $110 on a $100 cost basis, so $500 banked gross.
+const t5b = tick("B", pos(), 110, { vectorScore: 70 });
+check(
+  "B sells 25% at +$1,850",
+  [t5b.action, t5b.event, t5b.fraction, t5b.sold_shares, t5b.remaining_shares, t5b.gross_pl],
+  ["partial", "partial_profit_exit", 0.25, 50, 150, 500]
+);
+check(
+  "B's sale patches the position",
+  [t5b.patch.shares, t5b.patch.partial_profit_taken, t5b.patch.partial_exits.length],
+  [150, true, 1]
+);
+check("B holds below +$1,850", tick("B", pos(), 108, { vectorScore: 20 }).action === "partial", false);
+check(
+  "B sells only once",
+  tick("B", pos({ partial_profit_taken: true, partial_exits: [{ gross_pl: 500 }] }), 110, { vectorScore: 70 }).action === "partial",
+  false
+);
 
 // --- 6. DOWNSIDE VECTOR EXIT (score 80) --------------------------------------
 const t6 = tick("B", pos(), 94, { vectorScore: 80 });

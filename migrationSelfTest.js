@@ -157,10 +157,11 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
   // Partial sale: only E carries the rule now ($1,500, half). DART C lost its +$2,000
-  // row on 2026-11-06, D lost its own when it was rebuilt as B's copy on 2026-11-08,
-  // and B never had one (live: cloneSystems.ts SYSTEM_PARTIAL_PROFIT).
+  // row on 2026-11-06 and D lost its own when it was rebuilt as B's copy on 2026-11-08.
+  // B's row was ADDED on 2026-11-10 at the owner's direction: 25% once, at +$1,850
+  // (live: cloneSystems.ts SYSTEM_PARTIAL_PROFIT).
   check("partial: C has none", partialProfitPolicy("C"), null);
-  check("partial: B has none", partialProfitPolicy("B"), null);
+  check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
   check("partial: D has none", partialProfitPolicy("D"), null);
   check("partial: E takes half at +$1,500", partialProfitPolicy("E"), { threshold: 1500, fraction: 0.5 });
   const part = decideTick({ system: "E", halted: false, position: pos({}), price: 50 + 1600 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
