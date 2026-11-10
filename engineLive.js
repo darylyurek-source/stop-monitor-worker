@@ -36,6 +36,32 @@ const WRITE_ACTIONS = new Set(["exit", "press", "partial", "grid"]);
 
 let switches = new Map(); // system -> { engine, mode }
 
+// SYSTEM-WIDE EMERGENCY (Base44's switchboard answer, carried on getEngineSwitches).
+// While an episode is in force this writer refuses EVERY verdict — press, partial, grid
+// step, exit, even a display mark — because the tape is the thing that has failed and
+// Base44's emergency liquidator closes the book at an independently verified price.
+// Absent or unreadable means active: false: a switchboard hiccup must never stop the
+// engine from managing a position.
+let emergency = null;
+
+export function setEmergency(row) {
+  const was = Boolean(emergency && emergency.active);
+  emergency = row && row.active ? row : null;
+  const now = Boolean(emergency);
+  if (was !== now) {
+    console.log(
+      now
+        ? `[emergency] ACTIVE (${emergency.status}) — every write refused; Base44's liquidator owns the book`
+        : "[emergency] cleared — the live writer resumes"
+    );
+  }
+  return emergency;
+}
+
+export function emergencyActive() {
+  return Boolean(emergency && emergency.active);
+}
+
 // Display marks on a hold are written at most this often per position.
 const MARK_INTERVAL_MS = 5000;
 const lastMark = new Map(); // "SYSTEM:id" -> ms of last mark write
@@ -53,6 +79,7 @@ const stats = {
   needsBudget: 0,
   halted: 0,
   refused: 0,
+  emergency: 0,
 };
 
 export function statsSummary() {
@@ -99,6 +126,13 @@ export async function apply(ref, verdict) {
   if (!ownsWrites(ref.system) || !verdict) {
     stats.refused += 1;
     return { applied: false, reason: "not_owner" };
+  }
+
+  // EMERGENCY: nothing is written at all. Checked BEFORE the verdict is inspected, so no
+  // action — including an exit decided on the failing tape — can reach a position.
+  if (emergencyActive()) {
+    stats.emergency += 1;
+    return { applied: false, reason: "emergency_shutdown" };
   }
 
   if (verdict.action === "needs_vector") {
