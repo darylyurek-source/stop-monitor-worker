@@ -132,9 +132,11 @@ export function dPressSizeFor(free) {
   return Math.floor(Math.min(D_MAX_PRESS_USD, f));
 }
 
-// cloneSystems.ts — no system overrides the shared -$1,700 stop (DART A+ carried
-// the last override and is retired).
-export const SYSTEM_HARD_STOP = {};
+// cloneSystems.ts — per-system hard-loss stop override. DART D's three stops were
+// doubled on 2026-11-11, on D's own account only: its hard-loss stop is -$3,400
+// instead of the shared -$1,700. No other system overrides the shared stop, so
+// A, B and C keep -$1,700.
+export const SYSTEM_HARD_STOP = { D: -3400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -163,9 +165,10 @@ export const SYSTEM_PARTIAL_PROFIT = {
 // direction: C is B's rule set with ONE difference only — no profit-protection sale —
 // so it arms exactly as B does). E was removed from the engine on 2026-11-10.
 //
-// The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
-// automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
-// position can still arm earlier on deterioration.
+// The rule: once a position's P&L reaches +$2,000 the protective stop arms
+// automatically — no Vector test — and gives back whatever its own system's row
+// below holds ($350 for A, B and C, $700 for D from 2026-11-11). Below +$2,000 the
+// Vector test is unchanged, so a position can still arm earlier on deterioration.
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
@@ -199,6 +202,11 @@ export function partialProfitPolicy(system) {
 export const B_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 350 };
 export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350 };
 
+// DART D's own row (2026-11-11): B's 55/65 arming with D's stops at double size —
+// a $700 giveback (was $350). Nothing else about D changed; it is still B's rule
+// set plus its single buying-power-sized Press.
+const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
+
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
@@ -206,9 +214,9 @@ export const PROTECTIVE_BY_SYSTEM = {
   // with one difference only — no profit-protection sale — so it arms here and at
   // the +$2,000 auto-arm exactly as B does.
   C: B_RULE_SET,
-  // DART D runs B's 55/65 set and the same $350 giveback: its one change from B is the
-  // single Press, not this. D was reactivated on 2026-11-10 for the fresh test.
-  D: B_RULE_SET,
+  // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
+  // doubled on D's own account; B, C and A keep $350).
+  D: D_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
   // resolves to the same 55/65 rule set it always had — never to the fallback.
   A: B_RULE_SET,
