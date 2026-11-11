@@ -9,7 +9,7 @@
 // the replay is replayed by tickDecisionCore.js, protectiveTrigger.js, tickRules.js and
 // vectorCore.js, the same modules a live tick runs through.
 //
-// WHAT IT DOES. One recorded trading day, three accounts (A = ANEW, B, C):
+// WHAT IT DOES. One recorded trading day, four accounts (A = ANEW, B, C, D):
 //   • the day's recorded positions are read from Cloud SQL (positions_anew/_b/_c,
 //     chain_index 0 originals) and seeded at their OPENING state (initial_shares, cost
 //     basis, entry fees) — a recorded row holds the position's end-of-day shape, so
@@ -41,7 +41,7 @@
 // USAGE. From the Render service's Shell (or any container built from this repo):
 //     node replayDay.js 2026-11-06
 // Options:
-//     --systems=A,B,C   which accounts (default all three)
+//     --systems=A,B,C,D which accounts (default all four)
 //     --no-write        print only; do not write the RenderReplay rows
 //     --verbose         also print every trade line
 // ============================================================================
@@ -57,11 +57,13 @@ const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 
 // The accounts the replay covers, and where their records live. A is the New DART A
-// (ANEW); B is the standard and the opener; C is B's rule set.
+// (ANEW); B is the standard and the opener; C is B's rule set; D is B's rule set plus
+// ONE change — a single Press sized from its own buying power.
 const ACCOUNTS = {
   A: { system: "ANEW", table: "positions_anew", label: "DART A" },
   B: { system: "B", table: "positions_b", label: "DART B" },
   C: { system: "C", table: "positions_c", label: "DART C" },
+  D: { system: "D", table: "positions_d", label: "DART D" },
 };
 
 const RULE_SOURCE = "the Render engine's own modules in this repository — tickDecisionCore.decideTick + protectiveTrigger.assessProtectiveTrigger + tickRules (costs, thresholds, auto-arm) + vectorCore, the exact code a live tick runs through";
@@ -363,7 +365,7 @@ function replayAccount(account, barsBySymbol, openMs, closeMs) {
 // --- main --------------------------------------------------------------------
 
 function parseArgs(argv) {
-  const out = { date: null, systems: ["A", "B", "C"], write: true, verbose: false };
+  const out = { date: null, systems: ["A", "B", "C", "D"], write: true, verbose: false };
   for (const arg of argv) {
     if (arg.startsWith("--systems=")) {
       out.systems = arg.slice("--systems=".length).split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
