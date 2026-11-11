@@ -47,7 +47,7 @@
 // ============================================================================
 
 import fetch from "node-fetch";
-import { configure as configureBridge, configure as configureCandles, providerBars } from "./candleService.js";
+import { configure as configureCandles, providerBars } from "./candleService.js";
 import { bridge, bridgeConfigured, configure as configureBridgeCreds, listCandles } from "./bridge.js";
 import { decideTick } from "./tickDecisionCore.js";
 import { assessProtectiveTrigger } from "./protectiveTrigger.js";
@@ -120,7 +120,6 @@ async function resolveConfig() {
   }
 
   configureBridgeCreds(bridgeUrl, bridgeKey);
-  configureBridge(bridgeUrl, bridgeKey);
   configureCandles(massiveKey);
 
   return { bridgeUrl, bridgeKey, massiveKey };
