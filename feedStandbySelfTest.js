@@ -1,10 +1,10 @@
-// feedStandbySelfTest.js — the Finnhub standby, proven before the Massive switch.
+// feedStandbySelfTest.js — the Massive REST standby, proven before it carries a price.
 //
 //     node render-worker/feedStandbySelfTest.js
 //
-// Part 1 pins the gate: a Massive print makes Finnhub silent, 15 s of silence lets it
+// Part 1 pins the gate: a stream print silences the REST lookup, 15 s of silence lets it
 // through, the 60 s print-age guard rejects an old print, MAGNITUDE IS NOT A GATE (a 20 %
-// move is used, 2026-11-09), and Massive's next print closes the takeover.
+// move is used, 2026-11-09), and the next stream print closes the takeover.
 //
 // Part 2 replays a Massive dropout end to end and prints the timeline, so the takeover
 // and the hand-back are visible rather than only asserted.
@@ -13,7 +13,7 @@
 // Exit code 0 = the standby may be used; exit code 1 = do not switch the feed.
 
 import {
-  admitFinnhub,
+  admitRest,
   noteMassive,
   summary,
   takeovers,
@@ -45,38 +45,38 @@ reset();
 noteMassive("AAPL", 100, T0);
 
 check(
-  "Finnhub silent while Massive is current",
-  admitFinnhub("AAPL", 100.01, { now: T0 + 1000, exchangeMs: T0 + 1000 }),
+  "REST lookup silent while the stream is current",
+  admitRest("AAPL", 100.01, { now: T0 + 1000, exchangeMs: T0 + 1000 }),
   { use: false, reason: "massive_current", massiveAgeMs: 1000 }
 );
 
 check(
   "exactly 15 s of Massive silence is still 'current'",
-  admitFinnhub("AAPL", 100.01, { now: T0 + STALE_AFTER_MS, exchangeMs: T0 + STALE_AFTER_MS }),
+  admitRest("AAPL", 100.01, { now: T0 + STALE_AFTER_MS, exchangeMs: T0 + STALE_AFTER_MS }),
   { use: false, reason: "massive_current", massiveAgeMs: STALE_AFTER_MS }
 );
 
 check(
-  "15 s + 1 ms lets Finnhub take the symbol over",
-  admitFinnhub("AAPL", 100.02, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
+  "15 s + 1 ms lets the REST lookup take the symbol over",
+  admitRest("AAPL", 100.02, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1 }
 );
 
 check(
   "a second standby print continues the same takeover",
-  admitFinnhub("AAPL", 100.03, { now: T0 + STALE_AFTER_MS + 500, exchangeMs: T0 + STALE_AFTER_MS + 500 }),
+  admitRest("AAPL", 100.03, { now: T0 + STALE_AFTER_MS + 500, exchangeMs: T0 + STALE_AFTER_MS + 500 }),
   { use: true, reason: "takeover", started: false, prints: 2, massiveAgeMs: STALE_AFTER_MS + 500 }
 );
 
 const handback = noteMassive("AAPL", 100.10, T0 + STALE_AFTER_MS + 900);
 check("Massive's next print hands the symbol back", handback?.symbol, "AAPL");
 check("hand-back starts at the first standby print", handback?.startedAt, T0 + STALE_AFTER_MS + 1);
-check("hand-back measures how long Finnhub served it", handback?.durationMs, 899);
+check("hand-back measures how long the REST lookup served it", handback?.durationMs, 899);
 check("hand-back counts the prints it carried", handback?.prints, 2);
 
 check(
-  "after the hand-back Finnhub is silent again",
-  admitFinnhub("AAPL", 100.11, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 }),
+  "after the hand-back the REST lookup is silent again",
+  admitRest("AAPL", 100.11, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 }),
   { use: false, reason: "massive_current", massiveAgeMs: 100 }
 );
 
@@ -85,17 +85,17 @@ reset();
 noteMassive("MSFT", 50, T0);
 check(
   "a standby print older than 60 s is refused",
-  admitFinnhub("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 - MAX_PRINT_AGE_MS - 1 }),
+  admitRest("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 - MAX_PRINT_AGE_MS - 1 }),
   { use: false, reason: "stale_print", printAgeMs: MAX_PRINT_AGE_MS + 1, massiveAgeMs: STALE_AFTER_MS + 1000 }
 );
 check(
   "a standby print with NO stamp is refused, never admitted on staleness alone",
-  admitFinnhub("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000 }),
+  admitRest("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000 }),
   { use: false, reason: "no_stamp", massiveAgeMs: STALE_AFTER_MS + 1000 }
 );
 check(
   "a standby print inside 60 s is used",
-  admitFinnhub("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 - 5000 }),
+  admitRest("MSFT", 50.1, { now: T0 + STALE_AFTER_MS + 1000, exchangeMs: T0 + STALE_AFTER_MS + 1000 - 5000 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1000 }
 );
 
@@ -106,12 +106,12 @@ reset();
 noteMassive("NVDA", 50, T0);
 check(
   "a standby price 20 % away is USED, not refused",
-  admitFinnhub("NVDA", 60, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
+  admitRest("NVDA", 60, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
   { use: true, reason: "takeover", started: true, prints: 1, massiveAgeMs: STALE_AFTER_MS + 1 }
 );
 check(
   "the next standby print continues on the new level",
-  admitFinnhub("NVDA", 61, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
+  admitRest("NVDA", 61, { now: T0 + STALE_AFTER_MS + 1, exchangeMs: T0 + STALE_AFTER_MS + 1 }),
   { use: true, reason: "takeover", started: false, prints: 2, massiveAgeMs: STALE_AFTER_MS + 1 }
 );
 check("no deviation counter remains", summary(T0 + STALE_AFTER_MS + 2).dropped.deviation, undefined);
@@ -126,12 +126,12 @@ reset();
 const B0 = 1_500_000_000_000;
 const steps = [
   { at: B0 + 0, feed: "massive", price: 100.0 },
-  { at: B0 + 3000, feed: "finnhub", price: 100.01 },
-  { at: B0 + 9000, feed: "finnhub", price: 100.02 },
-  { at: B0 + 16000, feed: "finnhub", price: 100.04 },
-  { at: B0 + 19000, feed: "finnhub", price: 100.09 },
+  { at: B0 + 3000, feed: "rest", price: 100.01 },
+  { at: B0 + 9000, feed: "rest", price: 100.02 },
+  { at: B0 + 16000, feed: "rest", price: 100.04 },
+  { at: B0 + 19000, feed: "rest", price: 100.09 },
   { at: B0 + 21500, feed: "massive", price: 100.12 },
-  { at: B0 + 22000, feed: "finnhub", price: 100.13 },
+  { at: B0 + 22000, feed: "rest", price: 100.13 },
 ];
 
 const clock = (ms) => new Date(ms).toISOString().slice(11, 23);
@@ -142,13 +142,13 @@ for (const step of steps) {
     console.log(
       `${clock(step.at)}  massive  ${step.price.toFixed(2)}  ` +
       (ended
-        ? `HANDED BACK — Finnhub served it ${(ended.durationMs / 1000).toFixed(1)}s (${ended.prints} prints)`
+        ? `HANDED BACK — REST served it ${(ended.durationMs / 1000).toFixed(1)}s (${ended.prints} prints)`
         : "primary feed")
     );
   } else {
-    const verdict = admitFinnhub("AAPL", step.price, { now: step.at, exchangeMs: step.at });
+    const verdict = admitRest("AAPL", step.price, { now: step.at, exchangeMs: step.at });
     console.log(
-      `${clock(step.at)}  finnhub  ${step.price.toFixed(2)}  ` +
+      `${clock(step.at)}  rest     ${step.price.toFixed(2)}  ` +
       (verdict.use
         ? verdict.started
           ? `STANDBY TAKEOVER — no Massive print for ${(verdict.massiveAgeMs / 1000).toFixed(1)}s`
@@ -168,14 +168,14 @@ check("dropout takeover carried two standby prints", sim[0].prints, 2);
 const finalSummary = summary(B0 + 22000);
 console.log(
   `\nsummary: takeovers=${finalSummary.takeovers} active=${finalSummary.activeCount} ` +
-  `finnhub_prints=${finalSummary.finnhubPrints} total=${(finalSummary.totalTakeoverMs / 1000).toFixed(1)}s ` +
+  `rest_prints=${finalSummary.restPrints} total=${(finalSummary.totalTakeoverMs / 1000).toFixed(1)}s ` +
   `longest=${(finalSummary.longestMs / 1000).toFixed(1)}s ` +
   `dropped=${JSON.stringify(finalSummary.dropped)}`
 );
 
 console.log(
   failures === 0
-    ? `\n${cases} checks passed — the Finnish standby gate is ready for PRICE_FEED=massive`
+    ? `\n${cases} checks passed — the REST standby gate is ready for PRICE_FEED=massive`
     : `\n${failures} of ${cases} checks FAILED — do not switch the feed`
 );
 
