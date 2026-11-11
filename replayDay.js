@@ -442,8 +442,11 @@ async function main() {
   };
 
   if (args.write) {
+    const rowNow = new Date().toISOString();
     const rows = Object.entries(out).map(([key, v]) => ({
       id: `render_replay|${key}|${date}`,
+      created_date: rowNow,
+      updated_date: rowNow,
       run_key: `render_replay|${key}|${date}`,
       trade_date: date,
       system: key,
