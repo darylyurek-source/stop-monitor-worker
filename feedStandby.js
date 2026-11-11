@@ -1,14 +1,14 @@
-// feedStandby.js — the Finnhub standby feed for Massive mode.
+// feedStandby.js — the REST standby for Massive mode.
 //
-// In massive mode Massive is the price source and Finnhub is a WARM STANDBY: the
-// standby socket stays connected with every open symbol subscribed, but a Finnhub
-// print is only allowed to route a symbol when Massive has gone quiet on it.
+// Massive is the ONE price source. There is no second vendor (2026-11-11: Finnhub is
+// out of the price path for good — it produced ghost prices). The backup is Massive's
+// own REST lookup, used only when the Massive STREAM has gone quiet on a symbol:
 //
-//   Massive current (a print within STALE_AFTER_MS)  → the Finnhub print is dropped.
-//   Massive quiet longer than STALE_AFTER_MS         → the Finnhub print is used and a
-//                                                      takeover starts.
-//   Massive prints again                              → the takeover ends, the symbol is
-//                                                      back on Massive.
+//   stream print within STALE_AFTER_MS  → the REST print is dropped; the stream owns it.
+//   stream quiet longer than that       → the REST snapshot's last trade is used and a
+//                                         takeover starts.
+//   stream prints again                 → the takeover ends, the symbol is back on the
+//                                         stream.
 //
 // One guard applies to every standby price: the print itself must describe the present
 // (MAX_PRINT_AGE_MS). MAGNITUDE IS NOT A GUARD (2026-11-09) — a standby price at a new
@@ -20,20 +20,20 @@
 // is called with, which is what lets the self-test drive a dropout exactly. It decides
 // nothing about trading — it only answers whether a price may be used.
 //
-// Every takeover is kept: symbol, when Finnhub started serving it, when Massive took it
-// back, how long that lasted and how many standby prints it carried.
+// Every takeover is kept: symbol, when the REST lookup started serving it, when the stream
+// took it back, how long that lasted and how many standby prints it carried.
 
 import { SOURCE_LIMITS } from "./tradeConditions.js";
 
-export const STALE_AFTER_MS = 15000;      // how long Massive may be silent before Finnhub covers a symbol
+export const STALE_AFTER_MS = 15000;      // how long the stream may be silent before the REST lookup covers a symbol
 // ONE freshness table for every source (tradeConditions.SOURCE_LIMITS), so this file cannot
 // hold its own private idea of "current" and drift away from the gate's.
-export const MAX_PRINT_AGE_MS = SOURCE_LIMITS.finnhub_stream;
+export const MAX_PRINT_AGE_MS = SOURCE_LIMITS.massive_snapshot;
 
 const HISTORY_LIMIT = 200;
 
 const massiveAt = new Map();    // symbol -> ms of the last Massive-sourced price
-const lastAccepted = new Map(); // symbol -> last price this worker accepted (either feed)
+const lastAccepted = new Map(); // symbol -> last price this worker accepted (stream or REST)
 const active = new Map();       // symbol -> the takeover in progress
 const completed = [];           // finished takeovers, oldest first
 
@@ -43,9 +43,9 @@ function norm(symbol) {
   return String(symbol || "").toUpperCase();
 }
 
-// A Massive price (stream trade or REST snapshot). Marks the symbol current and, if
-// Finnhub was covering it, ends that takeover — returning the record so the caller can
-// log how long the standby was used.
+// A Massive price (stream trade). Marks the symbol current and, if the REST lookup was
+// covering it, ends that takeover — returning the record so the caller can log how long the
+// standby was used.
 export function noteMassive(symbol, price, at = Date.now()) {
   const s = norm(symbol);
   const numeric = Number(price);
@@ -73,9 +73,16 @@ export function noteMassive(symbol, price, at = Date.now()) {
   return record;
 }
 
-// May this Finnhub print route this symbol? Only when Massive is stale for it, the
-// print describes the present, and it does not reprice the book.
-export function admitFinnhub(symbol, price, { now = Date.now(), exchangeMs = null } = {}) {
+// How long the stream has been silent on this symbol (Infinity when it has never printed).
+export function massiveAgeMs(symbol, now = Date.now()) {
+  const at = massiveAt.get(norm(symbol)) || 0;
+  return at ? now - at : Infinity;
+}
+
+// May this REST snapshot print route this symbol? Only when the stream is stale for it and
+// the print describes the present. Same provider, so there is nothing to re-decide about
+// provenance beyond that.
+export function admitRest(symbol, price, { now = Date.now(), exchangeMs = null } = {}) {
   const s = norm(symbol);
   const numeric = Number(price);
   if (!s) return { use: false, reason: "no_symbol" };
@@ -144,14 +151,14 @@ export function takeovers() {
 
 export function summary(now = Date.now()) {
   const running = activeTakeovers(now);
-  const finnhubPrints =
+  const restPrints =
     completed.reduce((sum, t) => sum + t.prints, 0) +
     running.reduce((sum, t) => sum + t.prints, 0);
   return {
     takeovers: completed.length,
     active: running,
     activeCount: running.length,
-    finnhubPrints,
+    restPrints,
     totalTakeoverMs: completed.reduce((sum, t) => sum + t.durationMs, 0),
     longestMs: completed.reduce((max, t) => Math.max(max, t.durationMs), 0),
     dropped: { ...dropped },
