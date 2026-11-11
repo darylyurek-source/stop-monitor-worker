@@ -68,10 +68,16 @@ const RULE_SOURCE = "the Render engine's own modules in this repository — tick
 
 // --- ET clock helpers --------------------------------------------------------
 
-const etParts = new Intl.DateTimeFormat("en-US", {
+const ET_FMT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/New_York", hourCycle: "h23",
   year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-}).formatToParts;
+});
+
+// Called as a function so the formatter's own `this` stays bound: taking
+// formatToParts off the instance and calling it bare throws on every use.
+function etParts(date) {
+  return ET_FMT.formatToParts(date);
+}
 
 // The UTC instant of an ET wall-clock time on a date (handles EST/EDT).
 function etMs(date, hh, mm) {
