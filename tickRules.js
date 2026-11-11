@@ -139,28 +139,29 @@ export function systemStop(system) {
   return Number.isFinite(Number(v)) ? Number(v) : STOP;
 }
 
-// cloneSystems.ts — partial profit-taking. DART A has NO row and therefore never sells
-// partially: one comparison, no-op. DART B's row was ADDED on 2026-11-10, before the
-// open, at the owner's direction — 25% of the position, once, at +$1,850. It is the
-// same number Base44 resolves, so the two engines cannot part company on it.
+// cloneSystems.ts — partial profit-taking. DART B's row was ADDED on 2026-11-10, before
+// the open, at the owner's direction — 25% of the position, once, at +$1,850. DART A
+// (ANEW) carries the same row: A is B plus the 5-minute delay, so it carries B's Profit
+// Protection too. It is the same number Base44 resolves, so the two engines cannot part
+// company on it.
 // DART C's row was REMOVED on 2026-11-06 (before the open): C runs B's rules with no
 // partial sale at all.
 // DART D's row was REMOVED on 2026-11-08 when D was rebuilt as an exact copy of B: D
-// never sells partially and holds every position to its own exits. E keeps its row
-// (+$1,500, 50%) because E is D's copy of 2026-10-30 and is halted.
+// never sells partially and holds every position to its own exits. E was removed from
+// the engine on 2026-11-10, so it has no row here.
 export const SYSTEM_PARTIAL_PROFIT = {
   B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
-  E: { threshold: 1500, fraction: 0.5 },
+  ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
 };
 
 // THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
 // DART D (B's rule set from 2026-11-08) and DART C (restored 2026-11-10, at the owner's
 // direction: C is B's rule set with ONE difference only — no profit-protection sale —
-// so it arms exactly as B does). DART E, halted, has none.
+// so it arms exactly as B does). E was removed from the engine on 2026-11-10.
 //
 // The rule: once a position's P&L reaches +$2,000 the $350 protective stop arms
 // automatically — no Vector test. Below +$2,000 the Vector test is unchanged, so a
-// position can still arm earlier on deterioration. E's single comparison is a no-op.
+// position can still arm earlier on deterioration.
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
@@ -187,13 +188,11 @@ export function partialProfitPolicy(system) {
 // protectiveStop.ts — arm thresholds and the giveback.
 //   B_RULE_SET  stock 55 / market 65 — DART A (ANEW), DART B and DART C. C arms
 //              on the Vector test only; A and B (from 2026-11-09) also arm at +$2,000
-//   CD_RULE_SET stock 65 / market 85 — DART E (halted; D moved to B's set 2026-11-08)
 //   C_RULE_SET  stock 65 / market 86 — the retired clones (no live system uses it)
-// All three give back $350. An unknown system resolves to C_RULE_SET, exactly as
+// Both give back $350. An unknown system resolves to C_RULE_SET, exactly as
 // protectivePolicy() does in Base44.
 // ---------------------------------------------------------------------------
 export const B_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 350 };
-export const CD_RULE_SET = { stockThreshold: 65, marketThreshold: 85, buffer: 350 };
 export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350 };
 
 export const PROTECTIVE_BY_SYSTEM = {
@@ -206,8 +205,6 @@ export const PROTECTIVE_BY_SYSTEM = {
   // DART D was rebuilt as an exact copy of DART B on 2026-11-08 and moved from its
   // own 65/85 row to B's 55/65 set. D is halted.
   D: B_RULE_SET,
-  // DART E is D's copy of 2026-10-30 and keeps its own 65/85 row. E is halted.
-  E: CD_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
   // resolves to the same 55/65 rule set it always had — never to the fallback.
   A: B_RULE_SET,
@@ -250,13 +247,14 @@ export const LOSS_LEVELS = [
 ];
 
 // ---------------------------------------------------------------------------
-// systemHalt.ts — E is the only halted account. C was reactivated 2026-11-01 and
-// D was reactivated 2026-11-09, ahead of that morning's open. A halted account
-// trades nothing: the engine returns a no-op decision and writes nothing.
+// systemHalt.ts — D is the only halted account, from 2026-11-10 at the owner's
+// direction. C was reactivated 2026-11-01. A halted account trades nothing: the
+// engine returns a no-op decision and writes nothing. E was removed from the engine
+// on 2026-11-10.
 // This list must always be kept in step with shared/systemHalt.ts on the Base44
 // side — the engine holds its own copy so a tick never depends on a network read.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = ["E"];
+export const HALTED_SYSTEMS = ["D"];
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 
