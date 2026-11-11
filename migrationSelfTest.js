@@ -156,38 +156,37 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Partial sale: only E carries the rule now ($1,500, half). DART C lost its +$2,000
-  // row on 2026-11-06 and D lost its own when it was rebuilt as B's copy on 2026-11-08.
-  // B's row was ADDED on 2026-11-10 at the owner's direction: 25% once, at +$1,850
-  // (live: cloneSystems.ts SYSTEM_PARTIAL_PROFIT).
+  // Profit Protection: B, A (ANEW) and D sell 25% once at +$1,850. D carries it because
+  // D is B's rule set plus ONE change — a single Press. C sells none, and E was removed
+  // from the engine on 2026-11-10, so it has no rows in any table.
   check("partial: C has none", partialProfitPolicy("C"), null);
   check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
-  check("partial: D has none", partialProfitPolicy("D"), null);
-  check("partial: E takes half at +$1,500", partialProfitPolicy("E"), { threshold: 1500, fraction: 0.5 });
-  const part = decideTick({ system: "E", halted: false, position: pos({}), price: 50 + 1600 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
-  check("partial: half the shares are sold", part.action, "partial");
-  check("partial: 400 → 200", part.remaining_shares, 200);
-  const twice = decideTick({ system: "E", halted: false, position: pos({ partial_profit_taken: true, shares: 200, tcb: 10000 }), price: 50 + 1600 / 200, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("partial: D takes the same quarter at +$1,850", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
+  check("partial: E has no row", partialProfitPolicy("E"), null);
+  const part = decideTick({ system: "B", position: pos({}), price: 50 + 1900 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("partial: a quarter of the shares is sold", [part.action, part.sold_shares], ["partial", 100]);
+  check("partial: 400 → 300", part.remaining_shares, 300);
+  const twice = decideTick({ system: "B", position: pos({ partial_profit_taken: true, shares: 300, tcb: 15000 }), price: 50 + 1900 / 300, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: never fires twice", twice.action !== "partial", true);
 
-  // DART D (rebuilt 2026-11-08): ONE press at +$150, sized by its caller against the
-  // day's buying power, and the price trail starts at that press. D is halted, so the
-  // halt guard is lifted — the press block is what is under test here.
+  // DART D (2026-11-10, before the fresh test): ONE press at B's own Press 1 level,
+  // +$250, sized by its caller against the day's buying power, and the price trail
+  // starts at that press. No Press 2 and no Press 3 exist on D.
   const dPress = decideTick({
-    system: "D", halted: false, position: pos({}), price: 50 + 150 / 400,
-    pressSizeUsd: 20150, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
+    system: "D", halted: false, position: pos({}), price: 50 + 250 / 400,
+    pressSizeUsd: 20250, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
   });
-  check("press: D presses once at +$150", dPress.action, "press");
+  check("press: D presses once at +$250", dPress.action, "press");
   check("press: D's one press adds the sized amount", [dPress.shares_added, dPress.shares_after], [400, 800]);
   check("press: D's trail starts at that press", dPress.patch.price_trail_active, true);
   check("press: D never takes a Press 2", dPress.patch.pressed_2r, false);
   const dSecond = decideTick({
     system: "D", halted: false,
     position: pos({ pressed_1r: true, shares: 800, tcb: 40150, price_trail_active: true, price_trail_extreme: 50.375 }),
-    price: 50 + 750 / 800, pressSizeUsd: 20150, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
+    price: 50 + 750 / 800, pressSizeUsd: 20250, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
   });
   check("press: D takes no press above +$700 or +$800", dSecond.action, "hold");
-  const dNoBudget = decideTick({ system: "D", halted: false, position: pos({}), price: 50 + 150 / 400, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5 });
+  const dNoBudget = decideTick({ system: "D", halted: false, position: pos({}), price: 50 + 250 / 400, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5 });
   check("press: D never presses an unmeasured amount", dNoBudget.action, "needs_budget");
 }
 
@@ -196,8 +195,10 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const closed = decideTick({ system: "B", position: pos({ status: "closed" }), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("guard: a closed position decides nothing", closed.action, "skipped");
   check("guard: reason is already_closed", closed.reason, "already_closed");
-  const halted = decideTick({ system: "E", position: pos({}), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
-  check("guard: a halted account (E) trades nothing", halted.action, "halted");
+  // No DART is halted today (A, B, C and D all trade, E is gone), so the guard is
+  // driven with the caller's own halt flag — the switch the worker uses.
+  const halted = decideTick({ system: "B", halted: true, position: pos({}), price: 51, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("guard: a halted account trades nothing", halted.action, "halted");
 }
 
 // --- report ------------------------------------------------------------------

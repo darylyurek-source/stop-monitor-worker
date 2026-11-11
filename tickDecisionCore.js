@@ -19,7 +19,7 @@
 //   3. TERMINAL: hard stop (systemStop) OR protective giveback OR price-trail breach
 //   4. protective high-water ratchet
 //   5. price-trail extreme ratchet
-//   6. partial profit-taking (B +$1,850 once 25%; E +$1,500 once 50% — A, C and D never sell partly)
+//   6. partial profit-taking (B, A/ANEW and D +$1,850 once 25% — C never sells partly)
 //   7. downside Vector 65 across newly crossed loss checkpoints (P&L < 0 only)
 //   8. upside Vector grid: activation at +$900, then ±$100 steps
 //   9. presses: 3R at +$800, 2R at +$700, 1R at the system's own threshold
