@@ -62,12 +62,14 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // ---------------------------------------------------------------------------
 // cloneSystems.ts — Press 1 is the ONE setting that differs per system.
 // ---------------------------------------------------------------------------
-// DART D was rebuilt as an exact copy of DART B on 2026-11-08 and presses ONCE, at
-// +$150 (see PRESS_PLAN below). Every other system keeps +$250.
+// DART D is B's rule set plus ONE change — a single Press instead of B's three — and
+// that press fires at B's own Press 1 level, +$250 (2026-11-10, before the fresh
+// test). Its SIZE is the difference, not its trigger: see PRESS_PLAN below. Every
+// system here presses at +$250.
 export const CLONE_PRESS1 = {
   B: 250,
   C: 250,
-  D: 150,
+  D: 250,
   E: 250,
   ANEW: 250,
 };
@@ -84,9 +86,9 @@ export function press1Threshold(system) {
 // share-price trail starts at the first one. A system with no row presses the shared
 // three times (+$700, +$800 after its own Press 1) at the fixed $40,000.
 //
-// DART D (2026-11-08) is the one exception: ONE press, at +$150, sized at the moment
-// it fires from D's own daily buying power, and the share-price trailing stop starts
-// at that press instead of at a Press 2 that no longer exists.
+// DART D (2026-11-08, retuned 2026-11-10) is the one exception: ONE press, at +$250,
+// sized at the moment it fires from D's own daily buying power, and the share-price
+// trailing stop starts at that press instead of at a Press 2 that no longer exists.
 // ---------------------------------------------------------------------------
 export const PRESS_PLAN = {
   D: { single: true, dynamicSize: true, trailAtFirstPress: true },
@@ -146,12 +148,14 @@ export function systemStop(system) {
 // company on it.
 // DART C's row was REMOVED on 2026-11-06 (before the open): C runs B's rules with no
 // partial sale at all.
-// DART D's row was REMOVED on 2026-11-08 when D was rebuilt as an exact copy of B: D
-// never sells partially and holds every position to its own exits. E was removed from
-// the engine on 2026-11-10, so it has no row here.
+// DART D's row was ADDED on 2026-11-10, before the fresh test: D is B's rule set plus
+// ONE change — a single Press — so it carries B's Profit Protection and sells 25% once
+// per position at +$1,850, exactly as B does. E was removed from the engine on
+// 2026-11-10, so it has no row here.
 export const SYSTEM_PARTIAL_PROFIT = {
   B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
+  D: { threshold: 1850, fraction: 0.25 }, // DART D — B plus one single, buying-power-sized Press
 };
 
 // THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
@@ -202,8 +206,8 @@ export const PROTECTIVE_BY_SYSTEM = {
   // with one difference only — no profit-protection sale — so it arms here and at
   // the +$2,000 auto-arm exactly as B does.
   C: B_RULE_SET,
-  // DART D was rebuilt as an exact copy of DART B on 2026-11-08 and moved from its
-  // own 65/85 row to B's 55/65 set. D is halted.
+  // DART D runs B's 55/65 set and the same $350 giveback: its one change from B is the
+  // single Press, not this. D was reactivated on 2026-11-10 for the fresh test.
   D: B_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
   // resolves to the same 55/65 rule set it always had — never to the fallback.
@@ -247,14 +251,15 @@ export const LOSS_LEVELS = [
 ];
 
 // ---------------------------------------------------------------------------
-// systemHalt.ts — D is the only halted account, from 2026-11-10 at the owner's
-// direction. C was reactivated 2026-11-01. A halted account trades nothing: the
-// engine returns a no-op decision and writes nothing. E was removed from the engine
-// on 2026-11-10.
+// systemHalt.ts — NO account is halted. C was reactivated 2026-11-01 and D on
+// 2026-11-10, before the fresh test that opens Nov 11: A, B, C and D all trade. A
+// halted account trades nothing — the engine returns a no-op decision and writes
+// nothing — so this list is the one lever that stops an account dead, and it is empty.
+// E was removed from the engine on 2026-11-10.
 // This list must always be kept in step with shared/systemHalt.ts on the Base44
 // side — the engine holds its own copy so a tick never depends on a network read.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = ["D"];
+export const HALTED_SYSTEMS = [];
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 
