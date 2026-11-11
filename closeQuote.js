@@ -11,10 +11,11 @@
 //
 //   1. this process's own last accepted price — but only if it is inside CLOSE_MAX_PRICE_AGE_MS
 //   2. Massive's snapshot for the symbol (its own last trade, already age-checked to 60 s there)
-//   3. a Finnhub quote, if the quote itself is current
-//   4. ONLY IF NOTHING CURRENT EXISTS: the most recent price that does exist, returned with
+//   3. ONLY IF NOTHING CURRENT EXISTS: the most recent price that does exist, returned with
 //      fresh: false and its age, because leaving a position open past the close is worse than
 //      closing it at the last price that actually traded
+//
+// There is no third vendor: Finnhub is not a price source (2026-11-11).
 //
 // A halted symbol legitimately has no current market price — its last print IS the market —
 // so case 4 is a real case, not a failure. It is LABELLED, never silent: the sweep logs it and
@@ -56,52 +57,12 @@ async function askSnapshot(fetchSnapshot, symbol) {
   }
 }
 
-async function askQuote(fetchQuote, symbol) {
-  if (typeof fetchQuote !== "function") return null;
-  try {
-    const raw = await fetchQuote(symbol);
-    if (raw == null) return null;
-    if (typeof raw === "number") {
-      const price = usable(raw);
-      return price ? { price, at: null } : null;
-    }
-    const price = usable(raw.price);
-    if (!price) return null;
-    const at = Number(raw.at);
-    return { price, at: Number.isFinite(at) && at > 0 ? at : null };
-  } catch (_) {
-    return null;
-  }
-}
-
-// A Finnhub quote WITH the provider's own stamp, so the caller can judge its age.
-// Policy-free on purpose: it accepts and rejects nothing — resolveClosePrice decides whether the
-// quote is current, exactly as the standby gate decides for a tick.
-export async function finnhubQuote(symbol, apiKey, { fetchImpl = fetch, timeoutMs = 8000 } = {}) {
-  if (!apiKey) return null;
-  try {
-    const res = await fetchImpl(
-      `https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${apiKey}`,
-      { signal: AbortSignal.timeout(timeoutMs) }
-    );
-    if (!res.ok) return null;
-    const q = await res.json().catch(() => null);
-    const price = Number(q && q.c);
-    if (!Number.isFinite(price) || price <= 0) return null;
-    const ts = Number(q && q.t);
-    return { price, at: Number.isFinite(ts) && ts > 0 ? ts * 1000 : null };
-  } catch (_) {
-    return null;
-  }
-}
-
 // Build the resolver the sweep calls, from the router's own maps. The maps are PASSED IN, never
 // imported, so the policy stays testable without a socket or a database.
 export function makeClosePriceResolver({
   lastPrice,
   lastTick,
   fetchSnapshot = null,
-  fetchQuote = null,
   now = Date.now,
   maxAgeMs,
 } = {}) {
@@ -118,7 +79,6 @@ export function makeClosePriceResolver({
       position,
       heldPrice,
       fetchSnapshot,
-      fetchQuote,
       now: typeof now === "function" ? now() : now,
       ...(Number(maxAgeMs) > 0 ? { maxAgeMs: Number(maxAgeMs) } : {}),
     });
@@ -136,7 +96,6 @@ export function ageText(ageMs) {
 //   position      — the position record (its current_price is the last resort)
 //   heldPrice     — { price, at } from the router, or null
 //   fetchSnapshot — async (symbol) => price | null   (Massive, self-age-checked)
-//   fetchQuote    — async (symbol) => { price, at } | null  (Finnhub)
 //
 // Returns { price, basis, ageMs, fresh } or null when no price of any kind exists — in which
 // case the sweep writes nothing and tries again, rather than inventing a fill.
@@ -145,7 +104,6 @@ export async function resolveClosePrice({
   position = null,
   heldPrice = null,
   fetchSnapshot = null,
-  fetchQuote = null,
   now = Date.now(),
   maxAgeMs = CLOSE_MAX_PRICE_AGE_MS,
 } = {}) {
@@ -165,24 +123,10 @@ export async function resolveClosePrice({
     return { price: snapshot, basis: "Massive snapshot taken at the close", ageMs: null, fresh: true };
   }
 
-  // 3. Finnhub's quote, if the quote itself is current.
-  const quote = await askQuote(fetchQuote, sym);
-  if (quote && (!Number.isFinite(quote.at) || nowMs - quote.at <= limit)) {
-    return {
-      price: quote.price,
-      basis: "Finnhub quote taken at the close",
-      ageMs: Number.isFinite(quote.at) ? nowMs - quote.at : null,
-      fresh: true,
-    };
-  }
-
-  // 4. Nothing current. Close at the most recent price that exists, labelled with its age.
+  // 3. Nothing current. Close at the most recent price that exists, labelled with its age.
   const stale = [];
   if (held) {
     stale.push({ price: held.price, basis: "last accepted price", ageMs: Number.isFinite(held.at) ? nowMs - held.at : null });
-  }
-  if (quote) {
-    stale.push({ price: quote.price, basis: "Finnhub quote", ageMs: Number.isFinite(quote.at) ? nowMs - quote.at : null });
   }
   const stored = usable(position?.current_price);
   if (stored) stale.push({ price: stored, basis: "position's stored price", ageMs: null });
