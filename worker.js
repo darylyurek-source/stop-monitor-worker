@@ -154,7 +154,7 @@ async function resolveBridgeConfig() {
 
 // The Massive key, resolved the same way as the bridge: this service's own
 // environment first, Base44 second. Never throws — a missing key simply leaves the
-// Finnhub feed in charge.
+// engine with no price source at all, which is the intended failure (2026-11-11).
 async function resolveMassiveKey() {
   if (MASSIVE_API_KEY) {
     console.log("[worker-config] market-data key from this service's environment");
@@ -173,7 +173,7 @@ async function resolveMassiveKey() {
     });
 
     if (!res.ok) {
-      console.error(`[worker-config] market-data key unavailable (HTTP ${res.status}) — Finnhub stays the feed`);
+      console.error(`[worker-config] market-data key unavailable (HTTP ${res.status}) — no price source`);
       return false;
     }
 
@@ -182,11 +182,11 @@ async function resolveMassiveKey() {
     console.log(
       MASSIVE_API_KEY
         ? "[worker-config] market-data key obtained from Base44"
-        : "[worker-config] Base44 returned no market-data key — Finnhub stays the feed"
+        : "[worker-config] Base44 returned no market-data key — no price source"
     );
     return Boolean(MASSIVE_API_KEY);
   } catch (err) {
-    console.error(`[worker-config] market-data key request failed (${err?.message || err}) — Finnhub stays the feed`);
+    console.error(`[worker-config] market-data key request failed (${err?.message || err}) — no price source`);
     return false;
   }
 }
