@@ -131,12 +131,15 @@ async function resolveConfig() {
 async function loadOpenings(table, date, system) {
   const rows = await bridge("filterPositionsInTable", {
     table,
-    query: { test_date: date, chain_index: 0 },
+    query: { test_date: date },
     sort: "entry_time",
     limit: 500,
   });
 
   return (Array.isArray(rows) ? rows : [])
+    // ORIGINALS ONLY — chain_index 0, and a record that carries no chain index at all
+    // is one (the app resolves a missing index as 0, so the two agree).
+    .filter((row) => Number(row?.chain_index || 0) === 0)
     .map((row) => {
       const entryPrice = Number(row.entry_price);
       const opened = Number(row.initial_shares) > 0 ? Number(row.initial_shares) : Number(row.shares);
