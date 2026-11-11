@@ -1,7 +1,8 @@
 // worker.js - Render tick-router for DART A / B / C live forward-test (PAPER).
 //
-// Finnhub supplies live WebSocket ticks (with a REST /quote fallback for
-// quiet symbols). Base44 owns ALL trading math - dartLiveNewA, dartLiveB and
+// Massive supplies every live price: its stream for the live tape, its own REST
+// lookup for a symbol the stream has gone quiet on. Finnhub is not a price source.
+// Base44 owns ALL trading math - dartLiveNewA, dartLiveB and
 // dartLiveC each compute stops, presses, exits and the Vector 65 from the live
 // tick P&L. This worker discovers open positions across the three permanent
 // accounts from getMonitoringStateAll, subscribes to each unique symbol once,
@@ -38,7 +39,6 @@
 //
 // Paper trading only. All values are USD.
 
-import WebSocket from "ws";
 import fetch from "node-fetch";
 import * as engineShadow from "./engineShadow.js";
 import * as engineLive from "./engineLive.js";
@@ -51,12 +51,11 @@ import * as standby from "./feedStandby.js";
 import * as tradeConditions from "./tradeConditions.js";
 import * as priceIncidents from "./priceIncidents.js";
 import { runSessionClose, CLOSE_SWEEP_INTERVAL_MS } from "./closeSweep.js";
-import { makeClosePriceResolver, finnhubQuote as quoteFromFinnhub, CLOSE_MAX_PRICE_AGE_MS } from "./closeQuote.js";
+import { makeClosePriceResolver, CLOSE_MAX_PRICE_AGE_MS } from "./closeQuote.js";
 import { verifyDatabase } from "./dbVerify.js";
 import { noteLargeMove, summary as largeMovesSummary, forget as forgetLargeMoves } from "./largeMoves.js";
 import { HALTED_SYSTEMS, isSystemHalted } from "./tickRules.js";
 
-const FINNHUB_API_KEY = process.env.FINNHUB_API_KEY;
 const BASE44_APP_URL = (process.env.BASE44_APP_URL || "").replace(/\/$/, "");
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 
@@ -74,17 +73,15 @@ let BRIDGE_API_KEY = process.env.BRIDGE_API_KEY;
 let MASSIVE_API_KEY = String(process.env.MASSIVE_API_KEY || "").trim();
 
 // WHICH PRICE FEED ROUTES TICKS.
-//   finnhub        — unchanged behaviour: the Finnhub socket routes every tick.
-//   massive-shadow — Finnhub still routes; Massive connects and only COMPARES prices.
-//   massive        — Massive routes every tick, and the Finnhub socket stays connected
-//                    as a WARM STANDBY: a symbol only takes Finnhub prices after 15 s
-//                    without a Massive print and hands back on Massive's next one
-//                    (feedStandby.js). Both feeds use the same trading rules.
+//   massive        — Massive's stream routes every tick, and Massive's own REST lookup
+//                    covers a symbol the stream has gone quiet on (feedStandby.js).
+//   massive-shadow — Massive connects and only COMPARES prices; nothing routes.
 //
-// The feed supplies (symbol, price) and nothing else, so every trading rule,
-// threshold, press, stop, size and exit is identical in all three modes. It is
-// decided at startup, because the Massive key is resolved there.
-let PRICE_FEED = "finnhub";
+// THERE IS NO SECOND VENDOR. Finnhub's socket, its standby and its quote fallback are
+// gone (2026-11-11): it produced ghost prices. The feed supplies (symbol, price) and
+// nothing else, so every trading rule, threshold, press, stop, size and exit is
+// unchanged.
+let PRICE_FEED = "massive";
 
 function resolveFeedMode() {
   // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10) — ONE FEED, NO CHOICE.
@@ -201,8 +198,6 @@ if (!BASE44_APP_URL || !BASE44_API_KEY) {
   process.exit(1);
 }
 
-const FINNHUB_WS_URL = "wss://ws.finnhub.io?token=" + FINNHUB_API_KEY;
-
 // Consolidated monitoring endpoint - returns open positions for A, B and C
 // in one response, each with its `system` and `handler` routing field.
 const MONITOR_ENDPOINT =
@@ -224,15 +219,6 @@ const SYNC_INTERVAL_CLOSED_MS = 60000;     // market closed, still inside the tr
 const SYNC_INTERVAL_OFFHOURS_MS = 300000;  // night or weekend: five minutes
 const TRADING_DAY_FROM_MIN = 9 * 60 + 20;  // 9:20 AM ET
 const TRADING_DAY_TO_MIN = 16 * 60 + 35;   // 4:35 PM ET
-const RECONNECT_BASE_MS = 1000;
-const RECONNECT_MAX_MS = 30000;
-// A refused handshake (HTTP 429) means Finnhub is refusing a NEW connection, so it
-// gets its own fixed wait and never the short end of the ladder.
-const RECONNECT_RATE_LIMIT_MS = 60000;
-// The backoff resets only once a connection has actually held this long. A
-// connection that is accepted and taken over moments later must not re-arm the
-// 1-second retry — that is what turns a takeover into a handshake ping-pong.
-const CONNECTION_STABLE_MS = 60000;
 
 // Hard timeout for each tick-forward HTTP request. If the Base44 handler
 // never returns (platform stalls, dropped connection), the AbortController
@@ -308,10 +294,6 @@ function rejectStreamPrint(symbol, price, reason, tag = "stream") {
 // computed here.
 const mailboxes = new Map();
 
-let ws = null;
-let reconnectTimer = null;
-let reconnectAttempts = 0;
-let stableTimer = null;
 
 
 // ------------------------------------------------------------
@@ -408,13 +390,11 @@ async function syncWithBase44() {
         // over from an earlier session (which an overnight gap would otherwise lock out).
         lastPrice.delete(symbol);
         forgetLargeMoves(symbol);
-        wsSend({ type: "subscribe", symbol });
         console.log(`[sync] + ${symbol}`);
       }
     }
     for (const symbol of prevSymbols) {
       if (!seenSymbols.has(symbol)) {
-        wsSend({ type: "unsubscribe", symbol });
         lastTick.delete(symbol);
         console.log(`[sync] - ${symbol} (no longer open)`);
       }
@@ -423,23 +403,10 @@ async function syncWithBase44() {
     symbolPositions.clear();
     for (const [k, v] of next) symbolPositions.set(k, v);
 
-    // Point Massive at the same symbols (in shadow mode it only compares them), and
-    // open or close the Finnhub socket to match what is actually open: Finnhub drops
-    // a socket that has no subscription within a second or two, so holding one on an
-    // empty book produces nothing but a reconnect storm and handshake refusals.
+    // Point Massive at the same symbols (in shadow mode it only compares them). There is
+    // no second feed to open, hold or close: Massive's stream owns every open symbol and
+    // its REST lookup covers the quiet ones.
     massiveFeed.setSymbols([...seenSymbols]);
-    // Finnhub: the router in finnhub mode, the warm standby in massive mode. Either way
-    // it holds ONE socket for every open symbol; in massive mode an empty book keeps the
-    // standby socket alive on SPY instead of closing it.
-    if (symbolPositions.size > 0 || PRICE_FEED === "massive") {
-      connectWebSocket();
-      if (PRICE_FEED === "massive" && symbolPositions.size === 0) {
-        wsSend({ type: "subscribe", symbol: "SPY" });
-      }
-    } else if (ws) {
-      try { ws.removeAllListeners(); ws.terminate(); } catch (_) {}
-      ws = null;
-    }
 
     // Drop mailboxes whose position is no longer open. A mailbox with a request
     // still in flight is left alone - its own pump finishes and a later sync
@@ -777,22 +744,14 @@ function routeTick(symbol, price, exchangeMs, source = "finnhub") {
 
 
 // ------------------------------------------------------------
-// MASSIVE PRIMARY, FINNHUB STANDBY
+// MASSIVE PRIMARY, MASSIVE REST STANDBY
 //
-// In massive mode every accepted Massive price is routed and marks its symbol current.
-// Finnhub stays connected as a warm standby: its print for a symbol is used only after
-// 15 s without a Massive print, and the symbol hands back on Massive's next print. Each
-// takeover is logged with its symbol, its start time and how long the standby served it,
-// so how often the backup is needed is visible in the log.
+// Every accepted Massive price is routed and marks its symbol current. When the stream goes
+// quiet on a symbol, Massive's own REST snapshot stands in (restStandbyPass below) and the
+// symbol hands back on the next stream print. Finnhub is not in this path at all. Each
+// takeover is logged with its symbol, its start time and how long the backup served it, so
+// how often the backup is needed is visible in the log.
 // ------------------------------------------------------------
-
-// What the Finnhub socket subscribes to: every open symbol, plus SPY on an empty book in
-// massive mode so the standby socket has something holding it open.
-function standbySubscriptions() {
-  const symbols = [...symbolPositions.keys()];
-  if (PRICE_FEED === "massive" && symbols.length === 0) symbols.push("SPY");
-  return symbols;
-}
 
 // One Massive STREAM print. Every question about it is now asked by ONE gate
 // (tradeConditions.admitPrice), so a stream print, a snapshot, a standby print and a quote
@@ -867,200 +826,67 @@ function adoptMassivePrice(symbol, price, exchangeMs = null) {
   routeTick(symbol, price, exchangeMs, "massive");
 }
 
-// May this Finnhub print route its symbol? Only when Massive is stale for it, the print
-// describes the present (60 s), and it does not reprice the book (3%).
-function standbyAdmits(symbol, price, exchangeMs) {
-  const verdict = standby.admitFinnhub(symbol, price, { exchangeMs });
-  if (!verdict.use) {
-    if (verdict.reason !== "massive_current") {
-      console.warn(
-        `[standby] ${symbol} Finnhub print ${price} REJECTED — ${verdict.reason}` +
-        (verdict.printAgeMs ? ` (${Math.round(verdict.printAgeMs / 1000)}s old)` : "")
+// ------------------------------------------------------------
+// MASSIVE REST STANDBY (2026-11-11)
+//
+// Finnhub is NOT a price source. When the STREAM goes quiet on a symbol, the backup is
+// Massive's own REST lookup — the snapshot's last trade — judged by the SAME gate a stream
+// print goes through (age, sale conditions, monotonic tape), so the backup can never hand
+// the engine a price the stream would have refused.
+//
+//   stream print within STALE_AFTER_MS → no lookup: the stream owns the symbol.
+//   stream quiet longer than that      → one snapshot per pass, each takeover logged.
+//   Massive down entirely              → no snapshot, no price, and every rule that needs
+//                                        one (opening, Press, replacement, stop, exit)
+//                                        has nothing to act on. Nothing is invented.
+// ------------------------------------------------------------
+const REST_STANDBY_INTERVAL_MS = 5000;
+const REST_STANDBY_MAX_SYMBOLS = 40;
+
+async function restStandbyPass() {
+  if (PRICE_FEED !== "massive" || marketClosed) return;
+  if (symbolPositions.size === 0) return;
+
+  const nowMs = Date.now();
+  const quiet = [...symbolPositions.keys()]
+    .filter((s) => standby.massiveAgeMs(s, nowMs) > standby.STALE_AFTER_MS)
+    .slice(0, REST_STANDBY_MAX_SYMBOLS);
+  if (!quiet.length) return;
+
+  for (const symbol of quiet) {
+    const tick = await massiveFeed.snapshotTick(symbol);
+    if (!tick) continue; // Massive has no snapshot: no price, and no substitute for one
+
+    const verdict = tradeConditions.admitPrice({
+      source: "massive_snapshot",
+      symbol,
+      price: tick.price,
+      stampMs: tick.stampMs,
+      conditions: tick.conditions,
+    });
+    if (verdict.tier !== "use") continue;
+
+    const admitted = standby.admitRest(symbol, tick.price, { now: Date.now(), exchangeMs: tick.stampMs });
+    if (!admitted.use) continue;
+    if (admitted.started) {
+      console.log(
+        `[standby] ${symbol} REST TAKEOVER at ${new Date().toISOString()} — no stream print for ` +
+        `${(admitted.massiveAgeMs / 1000).toFixed(1)}s, routing Massive snapshot ${tick.price}`
       );
     }
-    return false;
+    adoptMassivePrice(symbol, tick.price, tick.stampMs);
   }
-  if (verdict.started) {
-    console.log(
-      `[standby] ${symbol} TAKEOVER at ${new Date().toISOString()} — no Massive print for ` +
-      `${(verdict.massiveAgeMs / 1000).toFixed(1)}s, routing Finnhub ${price}`
-    );
-  }
-  return true;
 }
 
 
 // ------------------------------------------------------------
-// FINNHUB WEBSOCKET
+// NO SECOND VENDOR SOCKET (2026-11-11)
+//
+// The Finnhub WebSocket — its one-socket rule, its 429 reconnect ladder, its standby
+// handshake and its trade handler — is DELETED. It was unreachable since 2026-11-10 and it
+// is not a price source: the only feed is Massive's stream, with Massive's own REST lookup
+// as the backup. Nothing re-enables a second vendor from this file.
 // ------------------------------------------------------------
-
-function wsSend(message) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(message));
-  }
-}
-
-function connectWebSocket() {
-  // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10). No Finnhub socket is opened in any
-  // mode: no primary stream, no warm standby, no takeover hand-back, no reconnect ladder.
-  // The function is kept so every call site still works, and so the socket can be restored
-  // from the commit before this one. Massive is the one feed.
-  return;
-
-  // In finnhub mode this socket routes every tick. In massive mode it is the WARM
-  // STANDBY: one socket with every open symbol subscribed, its prices used only for a
-  // symbol Massive has gone quiet on. The one-socket rule is identical in both modes.
-  const standbyOnly = PRICE_FEED === "massive";
-  // Nothing open and no standby to hold: Finnhub closes an unsubscribed socket in about
-  // two seconds, and the retries that follow are what produced the 429 storm. The next
-  // sync opens the socket as soon as a position exists.
-  if (!standbyOnly && symbolPositions.size === 0) return;
-  // ONE socket per process. Two sockets from the same worker fight over the same
-  // stream: Finnhub gives it to whichever connected last and refuses the other with
-  // 429, so each side's retry closes the other — a handshake ping-pong. A socket
-  // that is still live is therefore never replaced, and a finished one is retired
-  // before its successor opens.
-  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-    return;
-  }
-  if (ws) {
-    try { ws.removeAllListeners(); ws.terminate(); } catch (_) {}
-    ws = null;
-  }
-
-  console.log("Connecting to Finnhub WebSocket...");
-
-  const socket = new WebSocket(FINNHUB_WS_URL);
-  ws = socket;
-
-  // Every handler below belongs to THIS socket. Once a socket has been replaced its
-  // events are ignored, so a late 'close' can never schedule a retry for a socket
-  // that is no longer the current one.
-  socket.on("open", () => {
-    if (ws !== socket) return;
-
-    console.log(
-      standbyOnly
-        ? `Finnhub standby connected — ${standbySubscriptions().length} symbol(s) subscribed (Massive is the primary feed)`
-        : "Connected to Finnhub WebSocket"
-    );
-
-    // NOT reset here: the backoff resets only after the connection has held for
-    // CONNECTION_STABLE_MS, so being accepted and immediately taken over cannot
-    // re-arm the 1-second retry.
-    clearTimeout(stableTimer);
-    stableTimer = setTimeout(() => {
-      if (ws === socket && socket.readyState === WebSocket.OPEN) {
-        reconnectAttempts = 0;
-        console.log(`[ws] connection stable for ${CONNECTION_STABLE_MS / 1000}s — reconnect backoff reset`);
-      }
-    }, CONNECTION_STABLE_MS);
-
-    // Re-subscribe everything after reconnect (the standby keeps SPY on an empty book).
-    for (const symbol of standbyOnly ? standbySubscriptions() : symbolPositions.keys()) {
-      wsSend({ type: "subscribe", symbol });
-    }
-  });
-
-  socket.on("message", (raw) => {
-    if (ws !== socket) return;
-
-    let message;
-
-    try {
-      message = JSON.parse(raw.toString());
-    } catch (_) {
-      return;
-    }
-
-    if (message.type === "trade" && Array.isArray(message.data)) {
-      for (const trade of message.data) {
-        const symbol = String(trade.s || "").toUpperCase();
-        const price = Number(trade.p);
-
-        if (symbol && Number.isFinite(price) && price > 0) {
-          // `trade.t` is Finnhub's own epoch-ms stamp for this print, and it is REQUIRED: a
-          // print with no stamp cannot be judged, and an unjudgeable price is refused (the
-          // hole that admitted one on the routing staleness alone).
-          const stamp = Number(trade.t);
-          const verdict = tradeConditions.admitPrice({
-            source: "finnhub_stream",
-            symbol,
-            price,
-            stampMs: stamp,
-          });
-          if (verdict.tier !== "use") {
-            rejectStreamPrint(symbol, price, verdict.reason, "standby");
-            continue;
-          }
-          // Massive mode: Finnhub only covers a symbol Massive has gone quiet on.
-          if (PRICE_FEED === "massive" && !standbyAdmits(symbol, price, stamp)) continue;
-          routeTick(symbol, price, stamp);
-        }
-      }
-
-      return;
-    }
-
-    if (message.type === "error") {
-      console.error("[ws] Finnhub error:", message.msg);
-    }
-  });
-
-  socket.on("close", () => {
-    if (ws !== socket) return;    // a retired socket must never drive the retry loop
-    if (socket.finished) return;  // already handled by the error path
-
-    console.log("Finnhub WebSocket disconnected");
-    scheduleReconnect(false);
-  });
-
-  socket.on("error", (err) => {
-    if (ws !== socket) return;
-
-    const message = String(err?.message || "");
-    // HTTP 429 on the handshake = Finnhub refusing a new connection because one
-    // already holds the stream. Treating it like an ordinary drop is what floods
-    // the handshake endpoint.
-    const rateLimited = /\b429\b/.test(message);
-    console.error("[ws] error:", message);
-
-    // This socket is finished either way: retire it so the retry opens one clean
-    // connection instead of racing this one for the stream.
-    socket.finished = true;
-    clearTimeout(stableTimer);
-    try { socket.terminate(); } catch (_) {}
-
-    scheduleReconnect(rateLimited);
-  });
-}
-
-
-// ------------------------------------------------------------
-// RECONNECT
-// ------------------------------------------------------------
-
-function scheduleReconnect(rateLimited = false) {
-  if (reconnectTimer) return;
-
-  reconnectAttempts += 1;
-
-  // A rate-limited handshake gets the fixed long wait; everything else keeps the
-  // 1s, 2s, 4s … ladder capped at RECONNECT_MAX_MS.
-  const delay = rateLimited
-    ? RECONNECT_RATE_LIMIT_MS
-    : Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1));
-
-  console.log(
-    `[ws] reconnecting in ${delay} ms (attempt ${reconnectAttempts})` +
-    (rateLimited ? " — handshake refused (429)" : "")
-  );
-
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connectWebSocket();
-  }, delay);
-}
 
 
 // ------------------------------------------------------------
@@ -1099,10 +925,6 @@ const closePriceResolver = makeClosePriceResolver({
   lastPrice,
   lastTick,
   fetchSnapshot: (symbol) => massiveFeed.snapshotPrice(symbol),
-  // FINNHUB IS OUT OF THE PRICE EQUATION (2026-11-10): the close asks Massive and nothing
-  // else. With no current Massive price the resolver falls through to its labelled stale
-  // case instead of borrowing a quote from a second vendor.
-  fetchQuote: () => null,
 });
 
 // ------------------------------------------------------------
@@ -1185,18 +1007,18 @@ async function start() {
   );
   if (PRICE_FEED === "massive") {
     console.log(
-      "[feed] Finnhub standby: armed — one standby socket with every open symbol subscribed; " +
-      `a symbol only takes Finnhub prices after ${standby.STALE_AFTER_MS / 1000}s without a Massive print ` +
-      `(${standby.MAX_PRINT_AGE_MS / 1000}s print age, no magnitude filter), ` +
-      "and hands back on Massive's next print; every takeover is logged"
+      "[feed] backup = Massive REST lookup (no second vendor): armed — " +
+      `a symbol only takes a snapshot price after ${standby.STALE_AFTER_MS / 1000}s without a stream print ` +
+      `(${standby.MAX_PRINT_AGE_MS / 1000}s print age, no magnitude filter, same gate as a stream print), ` +
+      `checked every ${REST_STANDBY_INTERVAL_MS / 1000}s; every takeover is logged`
     );
+    setInterval(() => {
+      restStandbyPass().catch((err) => console.error(`[standby] REST pass failed: ${err?.message || err}`));
+    }, REST_STANDBY_INTERVAL_MS);
   }
 
   // Discover open positions across A, B and C.
   await syncWithBase44();
-
-  // Start live Finnhub feed (skipped when Massive owns the ticks).
-  connectWebSocket();
 
   // Discover newly opened / replacement positions, at a cadence that follows the
   // market: 15 s while the session is live, once a minute while the app reports it
@@ -1276,7 +1098,7 @@ async function start() {
     if (PRICE_FEED !== "massive") return;
     const s = standby.summary();
     console.log(
-      `[standby] takeovers=${s.takeovers} active=${s.activeCount} finnhub_prints=${s.finnhubPrints}` +
+      `[standby] takeovers=${s.takeovers} active=${s.activeCount} rest_prints=${s.restPrints}` +
       ` total=${(s.totalTakeoverMs / 1000).toFixed(1)}s longest=${(s.longestMs / 1000).toFixed(1)}s` +
       (s.activeCount
         ? ` (${s.active.map((a) => `${a.symbol} ${Math.round(a.ageMs / 1000)}s`).join(", ")})`
