@@ -136,7 +136,7 @@ export async function resolveConfig() {
 // --- inputs ------------------------------------------------------------------
 
 // The day's recorded ORIGINAL positions for one account, seeded at opening state.
-async function loadOpenings(table, date, system, opts = {}) {
+export async function loadOpenings(table, date, system, opts = {}) {
   const rows = await bridge("filterPositionsInTable", {
     table,
     query: { test_date: date },
