@@ -54,21 +54,26 @@ function check(name, actual, expected) {
 
 const assess = (system, position, extra) => assessProtectiveTrigger({ system, position, nowIso: NOW, ...(extra || {}) });
 
-// --- 1. THRESHOLDS ARE PER SYSTEM (B and C share 55/65; D keeps 65/85) ------
-// DART C moved to B's rule set on 2026-11-06 (live: protectiveStop.ts BY_SYSTEM).
-const holdC = assess("C", pos(), { stockScore: 54.99, marketScore: 64.99 });
-check("C holds just below 55/65", [holdC.action, holdC.event], ["hold", "protective_not_armed"]);
+// --- 1. THRESHOLDS ARE PER SYSTEM (C its own 45/85; A and B 55/65; D 55/65) --
+// DART C moved to 45/85 on 2026-11-11, after that day's close, from the extended
+// Vector sweep (live: protectiveStop.ts BY_SYSTEM).
+const holdC = assess("C", pos(), { stockScore: 44.99, marketScore: 84.99 });
+check("C holds just below 45/85", [holdC.action, holdC.event], ["hold", "protective_not_armed"]);
 
 const bars = [bar(100)];
-const armC = assess("C", pos(), { stockScore: 55, marketScore: 10, candles: bars });
-check("C arms at exactly stock 55", [armC.action, armC.triggered_by], ["activate", "stock"]);
+const armC = assess("C", pos(), { stockScore: 45, marketScore: 10, candles: bars });
+check("C arms at exactly stock 45", [armC.action, armC.triggered_by], ["activate", "stock"]);
 
 const sameForB = assess("B", pos(), { stockScore: 60, marketScore: 10, candles: bars });
 const sameForC = assess("C", pos(), { stockScore: 60, marketScore: 10, candles: bars });
 check("stock 60 arms B and C alike", [sameForB.action, sameForC.action], ["activate", "activate"]);
 
-const marketOnly = assess("C", pos(), { stockScore: 10, marketScore: 65, candles: bars });
-check("market 65 alone arms C", [marketOnly.action, marketOnly.triggered_by], ["activate", "market"]);
+// B's old market level no longer arms C; C needs the full 85.
+const market65C = assess("C", pos(), { stockScore: 10, marketScore: 65, candles: bars });
+check("market 65 alone no longer arms C", [market65C.action, market65C.event], ["hold", "protective_not_armed"]);
+
+const marketOnly = assess("C", pos(), { stockScore: 10, marketScore: 85, candles: bars });
+check("market 85 alone arms C", [marketOnly.action, marketOnly.triggered_by], ["activate", "market"]);
 
 // A score with no bar under it cannot become a high-water: refuse, never arm at zero.
 const noBar = assess("C", pos(), { stockScore: 99, marketScore: 99 });
@@ -87,7 +92,7 @@ check("activation patch", armC.patch, {
   protective_stop_active: true,
   protective_high_water_pl: 940,
   protective_triggered_time: NOW,
-  protective_triggered_stock_vec: 55, // the score armC armed on: C now arms at stock 55
+  protective_triggered_stock_vec: 45, // the score armC armed on: C now arms at stock 45
   protective_triggered_market_vec: 10,
 });
 

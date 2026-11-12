@@ -19,7 +19,7 @@
 //   3. TERMINAL: hard stop (systemStop) OR protective giveback OR price-trail breach
 //   4. protective high-water ratchet
 //   5. price-trail extreme ratchet
-//   6. partial profit-taking (B, A/ANEW and D +$1,850 once 25% — C never sells partly)
+//   6. partial profit-taking (B, A/ANEW, C and D — 25% once at +$1,850; C from 2026-11-11)
 //   7. downside Vector 65 across newly crossed loss checkpoints (P&L < 0 only)
 //   8. upside Vector grid: activation at +$900, then ±$100 steps
 //   9. presses: 3R at +$800, 2R at +$700, 1R at the system's own threshold
@@ -41,9 +41,10 @@
 
 import {
   r2, orderCost, slippageCost, unrealized,
-  PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, VECTOR_THRESHOLD, LOSS_LEVELS,
+  PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS,
   PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
   protectivePolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
+  vectorExitThreshold,
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
@@ -418,10 +419,13 @@ export function decideTick(args) {
       const checkpoints = [...(pos.vector_checkpoints || [])];
       let exitVec = false;
       let vecLevel = 0;
+      // The system's own exit threshold: DART C carries its own row, every other
+      // account the shared 65 (tickRules.vectorExitThreshold).
+      const vecExit = vectorExitThreshold(sys);
 
       for (const L of newLevels) {
         checked.add(L);
-        const decision = vectorScore >= VECTOR_THRESHOLD ? "EXIT" : "HOLD";
+        const decision = vectorScore >= vecExit ? "EXIT" : "HOLD";
         checkpoints.push({
           loss_checkpoint: L,
           pl: r2(pl),
@@ -431,7 +435,7 @@ export function decideTick(args) {
           shares,
           weighted_avg_cost: shares ? r2(tcb / shares) : null,
           combined_reversal_score: r2(vectorScore),
-          threshold: VECTOR_THRESHOLD,
+          threshold: vecExit,
           decision,
         });
         if (decision === "EXIT") {
@@ -496,7 +500,8 @@ export function decideTick(args) {
       };
     }
     const isActivation = !pos.profit_grid_active;
-    const decision = vectorScore >= VECTOR_THRESHOLD ? "EXIT" : "HOLD";
+    const vecExit = vectorExitThreshold(sys);
+    const decision = vectorScore >= vecExit ? "EXIT" : "HOLD";
     const profitCheckpoints = [...(pos.profit_checkpoints || [])];
     profitCheckpoints.push({
       profit_checkpoint: upsideLevel,
@@ -507,7 +512,7 @@ export function decideTick(args) {
       shares,
       weighted_avg_cost: shares ? r2(tcb / shares) : null,
       combined_reversal_score: r2(vectorScore),
-      threshold: VECTOR_THRESHOLD,
+      threshold: vecExit,
       decision,
     });
 

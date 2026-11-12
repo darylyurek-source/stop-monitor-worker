@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -50,11 +50,11 @@ function check(name, actual, expected) {
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
 check("hard stop per system: D doubled to -$3,400 on 2026-11-11", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -3400]);
-check("protective policy: A, B and C arm at 55/65 with the $350 giveback, D with $700", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("D").buffer], [55, 65, 55, 65, 700]);
+check("protective policy: A and B arm at 55/65, C at its own 45/85, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("D").buffer], [55, 65, 45, 85, 350, 700]);
 check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
-check("Profit Protection: A(ANEW), B and D sell 25% at +$1,850; C, E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, { threshold: 1850, fraction: 0.25 }, null, null]);
+check("Profit Protection: A(ANEW), B, C and D sell 25% at +$1,850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, null]);
 
 // --- 1. HARD STOP (A) ---------------------------------------------------------
 // long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
@@ -198,19 +198,21 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, B, C and D all arm at +$2,000 (the giveback is each system's own row: $350, $700 for D)", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 2000, 2000]);
+check("A, B, C and D all arm at +$2,000 (C and D's giveback is their own row: $350, $700 for D)", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 2000, 2000]);
 check("B sells 25% once at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
 check("A sells the same quarter (A is B plus the delay)", partialProfitPolicy("ANEW"), { threshold: 1850, fraction: 0.25 });
 check("D sells the same quarter (D is B plus one press)", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
-check("C never sells partially", partialProfitPolicy("C"), null);
+check("C sells the same quarter from 2026-11-11 (C is B's rules exactly)", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
 check("D's single press is +$250, sized from buying power, trail at that press", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, true]);
-// C's Vector test must stay B's original 55/65, and B's own must be untouched.
+// C's OWN Vector test (45/85 from 2026-11-11, after the close) must not touch B's 55/65.
 check(
-  "B and C arm the Vector test identically",
-  [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold],
-  [55, 65, 55, 65]
+  "C arms at 45/85 while B keeps 55/65",
+  [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
+  [45, 85, 55, 65]
 );
+// C's Vector Exit threshold is the other half of that one change.
+check("Vector Exit: C closes at 45, every other account at 65", [vectorExitThreshold("C"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [45, 65, 65, 65]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;

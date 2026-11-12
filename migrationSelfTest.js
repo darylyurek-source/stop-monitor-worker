@@ -156,10 +156,10 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Profit Protection: B, A (ANEW) and D sell 25% once at +$1,850. D carries it because
-  // D is B's rule set plus ONE change — a single Press. C sells none, and E was removed
-  // from the engine on 2026-11-10, so it has no rows in any table.
-  check("partial: C has none", partialProfitPolicy("C"), null);
+  // Profit Protection: B, A (ANEW), C and D sell 25% once at +$1,850. C carries it from
+  // 2026-11-11 after the close: C is B's rules exactly, with its own Vector test as the
+  // only change. E was removed from the engine on 2026-11-10 and has no row anywhere.
+  check("partial: C takes the same quarter at +$1,850", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
   check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
   check("partial: D takes the same quarter at +$1,850", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
   check("partial: E has no row", partialProfitPolicy("E"), null);

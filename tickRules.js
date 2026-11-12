@@ -158,6 +158,11 @@ export const SYSTEM_PARTIAL_PROFIT = {
   B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
   D: { threshold: 1850, fraction: 0.25 }, // DART D — B plus one single, buying-power-sized Press
+  // DART C (set 2026-11-11, after that day's close): C runs B's rules EXACTLY from
+  // the next session, so it carries B's Profit Protection — 25% once at +$1,850.
+  // The row removed on 2026-11-06 is restored; its one remaining difference from B
+  // is now the Vector test below (C's own arming thresholds and its own Vector Exit).
+  C: { threshold: 1850, fraction: 0.25 },
 };
 
 // THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
@@ -207,13 +212,32 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 // set plus its single buying-power-sized Press.
 const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
 
+// DART C's OWN Vector test (set 2026-11-11, after that day's close). From the next
+// session C is B's rule set exactly — presses, Profit Protection, the $2,000
+// auto-arm, the $350 giveback, the 1.75% trail, the hard stop, the 4:00 PM close —
+// with ONE change of its own: these two arming thresholds. Values are the winner of
+// the extended Vector sweep (2026-11-11): over C's own 230 recorded trades the live
+// 55/65 read -$24,410.69 and 45/85 reads -$147.11 with the exit at 45 — better in
+// BOTH weeks (+$5,811.42 Nov 2-6, -$5,958.53 Nov 9-11) — and stock 45 is an interior
+// optimum (50, 40, 25 and 65 all worse in both weeks). At 85 the market leg
+// saturates: market 85, 90, 95 and 100 give identical rows, so C arms on the stock
+// Vector alone. These are the identical numbers the Base44 copy must hold
+// (shared/protectiveStop.ts).
+export const C_STOCK_ARM = 45;
+export const C_MARKET_ARM = 85;
+
+const C_ONLY_RULE_SET = {
+  stockThreshold: C_STOCK_ARM,
+  marketThreshold: C_MARKET_ARM,
+  buffer: 350,
+};
+
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  // DART C moved to B's 55/65 on 2026-11-06. From 2026-11-10 it runs B's rule set
-  // with one difference only — no profit-protection sale — so it arms here and at
-  // the +$2,000 auto-arm exactly as B does.
-  C: B_RULE_SET,
+  // DART C — B's rule set with its own arming thresholds from 2026-11-11 after the
+  // close (was B_RULE_SET, i.e. 55/65, from 2026-11-10).
+  C: C_ONLY_RULE_SET,
   // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
   // doubled on D's own account; B, C and A keep $350).
   D: D_RULE_SET,
@@ -252,6 +276,25 @@ export function cProfitTrailPct(peakPl) {
 // checked once per position.
 // ---------------------------------------------------------------------------
 export const VECTOR_THRESHOLD = 65;
+
+// DART C's OWN Vector Exit threshold (set 2026-11-11, after that day's close): the
+// score at which its downside checkpoints and its upside grid close the position.
+// Every other account reads VECTOR_THRESHOLD. This is the second half of C's ONE
+// change from B — the other half is its arming thresholds above — and it is the
+// same sweep's choice: at 45 C reads -$147.11, at 48 -$874, at 65 -$2,879. Moving
+// it converts Protective Stops into Vector Exits (across the three accounts 380 -> 309
+// Protective Stops, 91 -> 171 Vector Exits).
+export const C_VECTOR_EXIT = 45;
+
+// Exported so a read-only study can sweep C's exit threshold without touching the
+// rule: the harness mutates this table in its own process, never in the worker.
+export const VECTOR_EXIT_BY_SYSTEM = { C: C_VECTOR_EXIT };
+
+// The Vector Exit threshold a system closes at: its own row, else the shared 65.
+export function vectorExitThreshold(system) {
+  const v = VECTOR_EXIT_BY_SYSTEM[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : VECTOR_THRESHOLD;
+}
 
 export const LOSS_LEVELS = [
   -100, -200, -300, -400, -500, -600, -700, -800, -900,
