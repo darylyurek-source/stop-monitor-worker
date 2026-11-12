@@ -59,7 +59,7 @@ const BASE44_API_KEY = process.env.BASE44_API_KEY;
 // The accounts the replay covers, and where their records live. A is the New DART A
 // (ANEW); B is the standard and the opener; C is B's rule set; D is B's rule set plus
 // ONE change — a single Press sized from its own buying power.
-const ACCOUNTS = {
+export const ACCOUNTS = {
   A: { system: "ANEW", table: "positions_anew", label: "DART A" },
   B: { system: "B", table: "positions_b", label: "DART B" },
   C: { system: "C", table: "positions_c", label: "DART C" },
@@ -82,7 +82,7 @@ function etParts(date) {
 }
 
 // The UTC instant of an ET wall-clock time on a date (handles EST/EDT).
-function etMs(date, hh, mm) {
+export function etMs(date, hh, mm) {
   const want = Date.parse(`${date}T${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:00Z`);
   let guess = want;
   for (let i = 0; i < 2; i++) {
@@ -95,7 +95,7 @@ function etMs(date, hh, mm) {
 }
 
 // HH:MM ET for an instant, so every line reads in the session's own clock.
-function etLabel(ms) {
+export function etLabel(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n)) return null;
   const parts = etParts(new Date(n));
@@ -105,7 +105,7 @@ function etLabel(ms) {
 
 // --- config (same resolution order as worker.js) -----------------------------
 
-async function resolveConfig() {
+export async function resolveConfig() {
   let bridgeUrl = (process.env.BRIDGE_URL || "").replace(/\/$/, "");
   let bridgeKey = process.env.BRIDGE_API_KEY;
   let massiveKey = String(process.env.MASSIVE_API_KEY || "").trim();
@@ -136,18 +136,20 @@ async function resolveConfig() {
 // --- inputs ------------------------------------------------------------------
 
 // The day's recorded ORIGINAL positions for one account, seeded at opening state.
-async function loadOpenings(table, date, system) {
+async function loadOpenings(table, date, system, opts = {}) {
   const rows = await bridge("filterPositionsInTable", {
     table,
     query: { test_date: date },
     sort: "entry_time",
-    limit: 500,
+    limit: opts.limit || 500,
   });
 
   return (Array.isArray(rows) ? rows : [])
-    // ORIGINALS ONLY — chain_index 0, and a record that carries no chain index at all
-    // is one (the app resolves a missing index as 0, so the two agree).
-    .filter((row) => Number(row?.chain_index || 0) === 0)
+    // ORIGINALS ONLY by default — chain_index 0, and a record that carries no chain
+    // index at all is one (the app resolves a missing index as 0, so the two agree).
+    // A study that replays every recorded trade passes { originalsOnly: false } and
+    // gets each record seeded from its own entry, replacements included.
+    .filter((row) => opts.originalsOnly === false || Number(row?.chain_index || 0) === 0)
     .map((row) => {
       const entryPrice = Number(row.entry_price);
       const opened = Number(row.initial_shares) > 0 ? Number(row.initial_shares) : Number(row.shares);
@@ -198,7 +200,7 @@ async function loadOpenings(table, date, system) {
 // The session's 1-minute bars for one symbol: the provider's own aggregates first (a
 // full session with real volume, exactly what candleService seeds a live series from),
 // the recorded archive second.
-async function loadBars(symbol, date) {
+export async function loadBars(symbol, date) {
   let bars = await providerBars(symbol, date).catch(() => []);
   if (!bars.length) {
     const rows = await listCandles(symbol, date).catch(() => []);
@@ -225,7 +227,7 @@ async function loadBars(symbol, date) {
 
 // --- one account -------------------------------------------------------------
 
-function replayAccount(account, barsBySymbol, openMs, closeMs) {
+export function replayAccount(account, barsBySymbol, openMs, closeMs) {
   const system = account.system;
   const positions = account.openings.slice();
   const series = new Map();   // symbol -> progressive bars
@@ -480,7 +482,11 @@ async function main() {
   console.log("=== END RENDER REPLAY RESULT ===");
 }
 
-main().catch((err) => {
-  console.error(`[replay] failed: ${err?.stack || err}`);
-  process.exit(1);
-});
+// Run the day replay only when this file is the program being run, so a read-only
+// study can import replayAccount/loadOpenings without re-running a replay of its own.
+if (String(process.argv[1] || "").includes("replayDay")) {
+  main().catch((err) => {
+    console.error(`[replay] failed: ${err?.stack || err}`);
+    process.exit(1);
+  });
+}
