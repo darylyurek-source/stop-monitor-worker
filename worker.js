@@ -1,5 +1,11 @@
 // worker.js - Render tick-router for DART A / B / C live forward-test (PAPER).
 //
+// SINGLE SOURCE (2026-11-13). This repository is the ONLY copy of the engine:
+// Base44 keeps no mirror of it any more. A change to a file here IS the change -
+// Render (service stop-monitor-worker, branch main, autoDeploy on) builds and
+// restarts on that commit by itself, so nothing is pushed anywhere a second time.
+// Edit engine code here, never in a second location.
+//
 // Massive supplies every live price: its stream for the live tape, its own REST
 // lookup for a symbol the stream has gone quiet on. Finnhub is not a price source.
 // Base44 owns ALL trading math - dartLiveNewA, dartLiveB and
