@@ -345,6 +345,30 @@ export function decideTick(args) {
 
   // Rule 2 — TERMINAL stop. Precedence is cloneTick.ts's exact order.
   const hardStop = systemStop(ruleKey);
+
+  // HARD LOSS STOP ON A SECOND VALID PRINT (2026-11-13, 10:58 ET).
+  // The gate now refuses ADF, odd-lot and non-last-sale prints, so the price that produced
+  // the false exits of this morning never reaches a rule. This is the second lock: when the
+  // caller asks for confirmation (the live engine does), one print at or through the hard
+  // stop arms it and the NEXT print at or through it closes the position. The exit itself is
+  // unchanged — same reason, same price, same accounting — it simply needs the tape to say it
+  // twice. Callers that pass no confirmation (replay, sweeps, the self-tests' baseline cases)
+  // keep the single-print behaviour their historical comparison depends on.
+  const confirm = args?.hardStopConfirm && typeof args.hardStopConfirm === "object"
+    ? args.hardStopConfirm
+    : null;
+  if (confirm && pl <= hardStop && !confirm.pending) {
+    return {
+      ...base,
+      action: "pending_confirm",
+      reason: "hard_stop_awaiting_second_print",
+      pending_step: "hard_stop_confirm",
+      pl_raw: pl,
+      hard_stop_detail: { hard_stop: hardStop, trigger_price: r2(price) },
+      prior_patches: priorPatches,
+    };
+  }
+
   if (pl <= hardStop || protectiveBreach || priceTrailBreach) {
     const reason = pl <= hardStop ? "realtime_stop_close" : priceTrailBreach ? "price_trail_stop" : "protective_stop";
     return {

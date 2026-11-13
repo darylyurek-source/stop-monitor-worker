@@ -780,6 +780,10 @@ async function onMassivePrice(symbol, price, exchangeMs, meta = {}) {
       conditions: meta.conditions,
       participantMs: meta.participantMs,
       trfMs: meta.trfMs,
+      // The print's own venue and size: exchange 4 (ADF) and anything under a round lot are
+      // refused by the gate as of 2026-11-13, before any rule sees the price.
+      exchange: meta.exchange,
+      size: meta.size,
     });
 
     if (verdict.tier === "refuse") {
@@ -863,6 +867,10 @@ async function restStandbyPass() {
       price: tick.price,
       stampMs: tick.stampMs,
       conditions: tick.conditions,
+      // Same three questions on the backup door: the snapshot's own venue and size travel
+      // with it, so an ADF or odd-lot last trade cannot price a position either (2026-11-13).
+      exchange: tick.exchange,
+      size: tick.size,
     });
     if (verdict.tier !== "use") continue;
 

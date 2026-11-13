@@ -25,13 +25,39 @@
 //    Both are refused here.
 //
 //    ALLOWED on purpose, and the distinction is Massive's own documented one:
-//      37  Odd Lot Trade           — a real, current price at odd-lot size. The genuine
-//                                    EWTX exit of 2026-11-09 was such a print, taped with
-//                                    0 s lag; refusing 37 would have refused it.
 //      32  Sold (Out Of Sequence)  — a regular-hours sale reported late. It DOES update
 //                                    the consolidated high/low, so it is a session price.
 //      14  Intermarket Sweep       — an in-session sweep price.
 //    A print carrying no conditions at all is judged on its timestamps alone.
+//
+// 1b. REVISED 2026-11-13, 10:58 ET — THE REGULAR LAST SALE, AND NOTHING ELSE.
+//    The 2026-11-09 cut above refused only the two extended-hours conditions, and it let
+//    condition 37 (Odd Lot) through on purpose, because the one genuine exit that morning
+//    had been an odd lot. The session then repeated the same failure through the doors that
+//    cut left open: by 10:56 ET on 2026-11-13, twenty-three DART positions across A, B, C
+//    and D had been closed on prints the tape itself had labelled as NOT a regular last
+//    sale — Average Price trades (2), Odd Lots (37), and ADF odd-lot reports, most of them
+//    under 100 shares, sitting 0.3-1.9 % from the prevailing price. A 1-share ADF print is
+//    a reporting artefact of an internalised retail order; it is a price for the volume
+//    column and for nothing else.
+//
+//    So the gate now asks three more questions, and refuses on any of them:
+//
+//      · WHOSE PRINT IS IT?   exchange 4 is the FINRA ADF — off-exchange reports, not a
+//                             venue's own trade. Refused (REFUSED_EXCHANGES).
+//      · HOW BIG IS IT?       under 100 shares is not a round-lot price DART may stop on,
+//                             whatever its conditions say (MIN_REGULAR_SHARES). This is
+//                             the explicit instruction of 2026-11-13 and it reverses the
+//                             37 exception recorded above: an odd lot is now refused
+//                             whether it arrives flagged 37 or merely small.
+//      · DOES IT SET THE LAST SALE?  any condition Massive documents as Update Last = No
+//                             (2, 7, 12, 13, 15, 16, 20, 21, 37, 52) plus the held-trade
+//                             indicator 621. NOT_A_LAST_SALE_CONDITIONS.
+//
+//    A print refused here is dropped and counted, exactly like a stale one: the book is
+//    untouched and the symbol's next regular print decides. A symbol whose whole tape is
+//    odd-lot and ADF reports has no accepted price, which the heartbeat reports as
+//    NO-ACCEPTED-PRICE rather than inventing one.
 //
 // 2. EXECUTION TIME versus REPORTING TIME (pt and t, on the same frame)
 //    pt = when the trade occurred at the exchange or TRF.
@@ -51,6 +77,35 @@ export const EXTENDED_HOURS_CONDITIONS = {
   12: "Form T/Extended Hours",
   13: "Extended Hours (Sold Out Of Sequence)",
 };
+
+// EVERY condition Massive documents as Update Last = No, plus the held-trade indicator.
+// A print carrying any of these is not the regular last sale, so it may not reprice or
+// close a live position. Source: massive.com/glossary/conditions-indicators (Update Last
+// column) — transcribe it there, never from memory.
+export const NOT_A_LAST_SALE_CONDITIONS = {
+  2: "Average Price Trade",
+  7: "Cash Sale",
+  12: "Form T/Extended Hours",
+  13: "Extended Hours (Sold Out Of Sequence)",
+  15: "Market Center Official Close",
+  16: "Market Center Official Open",
+  20: "Next Day",
+  21: "Price Variation Trade",
+  37: "Odd Lot Trade",
+  52: "Contingent Trade",
+  621: "Held trade — not last sale, not on the consolidated tape",
+};
+
+// Venues whose prints are not a trade DART may act on. Exchange 4 is the FINRA ADF: the
+// consolidated off-exchange reporting facility, where internalised retail orders and
+// odd-lot reports arrive — the door every bad exit on 2026-11-13 came through.
+export const REFUSED_EXCHANGES = {
+  4: "FINRA ADF/TRF (off-exchange report)",
+};
+
+// The smallest print that is a round-lot price. Below this, a print is an odd lot whatever
+// its condition codes say (2026-11-13).
+export const MIN_REGULAR_SHARES = 100;
 
 // How far behind its own arrival a trade may have been executed and still describe the
 // present. Members must report within seconds; two minutes is a wide allowance that still
@@ -284,6 +339,8 @@ export function resetGate() {
 //   conditions    — Massive's sale conditions only.
 //   participantMs — Massive's pt (execution time at the exchange or TRF).
 //   trfMs         — Massive's trft (when the TRF received it), used when pt is absent.
+//   exchange      — Massive's x, the venue that reported the print (4 = FINRA ADF).
+//   size          — Massive's s, the shares the print is for.
 export function admitPrice({
   source,
   symbol,
@@ -293,6 +350,8 @@ export function admitPrice({
   conditions = [],
   participantMs = null,
   trfMs = null,
+  exchange = null,
+  size = null,
 } = {}) {
   const src = String(source || "");
   const sym = String(symbol || "").toUpperCase();
@@ -327,11 +386,46 @@ export function admitPrice({
   const numeric = Number(price);
   if (!Number.isFinite(numeric) || numeric <= 0) return verdict("refuse", "bad_price", "not a positive price");
 
-  // 2. WHAT IS IT? Only Massive stamps SIP sale conditions. Finnhub's condition codes are a
-  //    different namespace, so a Finnhub price is judged on its stamp alone — never mapped.
+  // 2. WHAT IS IT? Only Massive stamps a venue, a size and SIP sale conditions. Finnhub's
+  //    condition codes are a different namespace, so a Finnhub price is judged on its stamp
+  //    alone — never mapped, and its absent exchange/size are simply not judged.
+
+  // 2a. WHOSE PRINT IS IT? (2026-11-13) An exchange-4 print is an ADF report, not a venue
+  //     trade: every bad exit that morning was one. Refused whatever else it carries.
+  const exchangeId = exchange == null || exchange === "" ? null : Number(exchange);
+  if (exchangeId != null && Number.isFinite(exchangeId) && REFUSED_EXCHANGES[exchangeId]) {
+    return verdict(
+      "refuse",
+      "adf_print",
+      `exchange ${exchangeId} ${REFUSED_EXCHANGES[exchangeId]} is not a venue print`,
+      { exchange: exchangeId }
+    );
+  }
+
+  // 2b. HOW BIG IS IT? (2026-11-13) Under a round lot a print is an odd lot, flagged or not.
+  const printSize = size == null || size === "" ? null : Number(size);
+  if (printSize != null && Number.isFinite(printSize) && printSize < MIN_REGULAR_SHARES) {
+    return verdict(
+      "refuse",
+      "odd_lot",
+      `${printSize}-share print is an odd lot (under ${MIN_REGULAR_SHARES})`,
+      { size: printSize }
+    );
+  }
+
+  // 2c. DOES IT SET THE LAST SALE? (2026-11-13) The extended-hours pair keeps its own code so
+  //     the monitoring history reads continuously; every other condition Massive documents as
+  //     Update Last = No is refused as what it is.
   for (const code of Array.isArray(conditions) ? conditions : []) {
-    const name = EXTENDED_HOURS_CONDITIONS[Number(code)];
-    if (name) return verdict("refuse", "extended_hours", `sale condition ${Number(code)} ${name}`);
+    const name = NOT_A_LAST_SALE_CONDITIONS[Number(code)];
+    if (!name) continue;
+    const ext = EXTENDED_HOURS_CONDITIONS[Number(code)];
+    return verdict(
+      "refuse",
+      ext ? "extended_hours" : "not_last_sale",
+      `sale condition ${Number(code)} ${name}`,
+      { condition: Number(code) }
+    );
   }
 
   // 3. HOW OLD IS IT? One freshness implementation (assessFreshness), one limit per source.

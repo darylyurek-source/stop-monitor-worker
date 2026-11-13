@@ -86,6 +86,15 @@ export async function primeSymbols(symbols) {
   }
 }
 
+// "SYSTEM:positionId" -> the print that armed the Hard Loss Stop, waiting for a second one
+// at or through the same level (2026-11-13). Cleared the moment a tick is no longer through
+// the level, or the position closes for any reason.
+const hardStopPending = new Map();
+
+export function hardStopPendingSummary() {
+  return { awaiting_second_print: hardStopPending.size };
+}
+
 // Decide one tick. Returns the verdict, or null when shadow mode is off or the
 // position is not in the book. Never throws, never writes.
 export function decide(ref, symbol, price, nowMs = Date.now()) {
@@ -129,6 +138,14 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   // amount.
   const sizing = pressSizing(ref.system, nowMs);
 
+  // HARD LOSS STOP — SECOND VALID PRINT (2026-11-13). One print at or through the level arms
+  // the stop; the next one at or through it closes the position. The marker lives here, in
+  // this process, keyed by position: it is a fact about the tape arriving twice, not a field
+  // on the trade, so nothing is written to the book to hold it. A restart costs one extra
+  // confirming print and never a missed stop.
+  const hlsKey = `${ref.system}:${ref.positionId}`;
+  const hlsPending = hardStopPending.has(hlsKey);
+
   const started = process.hrtime.bigint();
   let verdict = null;
   try {
@@ -140,6 +157,7 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
       candles: series && series.length ? series : undefined,
       pressSizeUsd: sizing ? sizing.pressSizeUsd : undefined,
       pressBudgetFree: sizing ? sizing.free : undefined,
+      hardStopConfirm: { pending: hlsPending },
     });
   } catch (err) {
     state.errors += 1;
@@ -150,6 +168,23 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   state.decideMicros.push(Math.round(micros));
   if (state.decideMicros.length > 5000) state.decideMicros.shift();
   state.decisions += 1;
+
+  // The Hard Loss Stop's own bookkeeping: armed by one print, fired by the next. A tick that
+  // is no longer through the level disarms it, so a single bad print can never leave a live
+  // trigger waiting to be completed by an unrelated price hours later.
+  if (verdict) {
+    if (verdict.action === "pending_confirm") {
+      if (!hlsPending) {
+        console.log(
+          `[live] ${ref.system} ${ref.positionId} HARD LOSS STOP awaiting a second print — ` +
+          `${symbol} at ${price} is through the level, nothing written`
+        );
+      }
+      hardStopPending.set(hlsKey, { price, at: nowMs });
+    } else {
+      hardStopPending.delete(hlsKey);
+    }
+  }
 
   // Carry the arming write on the verdict: first in prior_patches so a decision that
   // also writes lands both fields in one guarded update.

@@ -17,6 +17,9 @@
 // Part 7 — the two rules added 2026-11-10: a slower door may not price a symbol the stream is
 //          printing, and a print far from the last accepted one is QUARANTINED (may value, may
 //          not close) until a second print agrees — never refused, so a symbol cannot freeze.
+// Part 8 — the rule added during the session on 2026-11-13: only a regular last sale is a price.
+//          An ADF (exchange 4) print, an odd lot under 100 shares, and every condition Massive
+//          documents as Update Last = No are refused, and a refused print never moves the anchor.
 //
 // Deterministic: every call is given its own clock. No clock, no network, no socket.
 // Exit code 0 = the gate may stand in front of every door.
@@ -80,7 +83,7 @@ check(
 
 check(
   "SDGR 31.81, executed 3.9 min before it was taped — refused",
-  tierCode(stream({ symbol: "SDGR", price: 31.81, stampMs: SESSION, conditions: [37], participantMs: SESSION - 236000 })),
+  tierCode(stream({ symbol: "SDGR", price: 31.81, stampMs: SESSION, conditions: [32], participantMs: SESSION - 236000 })),
   ["refuse", "late_print"]
 );
 
@@ -103,10 +106,14 @@ check(
 );
 
 // THE CONTROLS. A gate that refuses these is as wrong as one that admits the fills above.
+// REVERSED 2026-11-13. On 2026-11-09 condition 37 was allowed on purpose, because this exit
+// was the one genuine print of that morning. Twenty-three false exits on 2026-11-13 came in
+// through exactly that door, so an odd lot is now refused whatever its lag: the frame below is
+// the same print that used to be admitted.
 check(
-  "EWTX, the genuine odd-lot exit (condition 37, 0 s lag) — USED",
+  "EWTX, the 2026-11-09 odd-lot exit (condition 37, 0 s lag) — REFUSED since 2026-11-13",
   tierCode(stream({ symbol: "EWTX", price: 42.5, stampMs: SESSION, conditions: [37], participantMs: SESSION - 20 })),
-  ["use", null]
+  ["refuse", "not_last_sale"]
 );
 
 check(
@@ -199,7 +206,7 @@ check(
 
 check(
   "the same print with conditions but still no execution stamp — QUARANTINED",
-  tierCode(stream({ symbol: "Q2", price: 50, stampMs: SESSION, conditions: [37] })),
+  tierCode(stream({ symbol: "Q2", price: 50, stampMs: SESSION, conditions: [32] })),
   ["quarantine", "no_execution_stamp"]
 );
 
@@ -235,7 +242,7 @@ check(
 
 // The invariant, exhaustively: no combination of missing provenance may reach 'use'.
 let everUsed = false;
-for (const conditions of [[], [37]]) {
+for (const conditions of [[], [32]]) {
   for (const trfMs of [null, 0]) {
     const v = stream({ symbol: `INV_${conditions.length}_${trfMs}`, price: 50, stampMs: SESSION, conditions, trfMs });
     if (v.tier === "use") everUsed = true;
@@ -279,7 +286,7 @@ stream({ symbol: "BAD", price: 10, stampMs: SESSION, conditions: [13], participa
 
 check(
   "a symbol refused three times still admits a clean print",
-  tierCode(stream({ symbol: "BAD", price: 10.5, stampMs: SESSION, conditions: [37], participantMs: SESSION - 10 })),
+  tierCode(stream({ symbol: "BAD", price: 10.5, stampMs: SESSION, conditions: [32], participantMs: SESSION - 10 })),
   ["use", null]
 );
 check(
@@ -320,25 +327,25 @@ const print = (over) => admitPrice({ nowMs: at(over.sec ?? 0), ...over });
 
 check(
   "the first print for a symbol is used — there is no reference to judge it against yet",
-  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 })),
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 100, stampMs: at(0), conditions: [32], participantMs: at(0), sec: 0 })),
   ["use", null]
 );
 
 check(
   "a 20 % jump on the next print is QUARANTINED, not refused (it may value, not close)",
-  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120, stampMs: at(1), conditions: [32], participantMs: at(1), sec: 1 })),
   ["quarantine", "magnitude_jump"]
 );
 
 check(
   "a second print agreeing with it CLEARS it — the anchor moves, the symbol is not frozen",
-  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120.4, stampMs: at(2), conditions: [37], participantMs: at(2), sec: 2 })),
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 120.4, stampMs: at(2), conditions: [32], participantMs: at(2), sec: 2 })),
   ["use", null]
 );
 
 check(
   "an ordinary print against the new anchor is used at once",
-  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 121, stampMs: at(3), conditions: [37], participantMs: at(3), sec: 3 })),
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 121, stampMs: at(3), conditions: [32], participantMs: at(3), sec: 3 })),
   ["use", null]
 );
 
@@ -347,7 +354,7 @@ check(
 // the stream already showed. The monotonic test cannot catch it (the execution time does not
 // walk back), which is exactly why the cross-door rule exists.
 resetGate();
-print({ source: "massive_stream", symbol: "DOOR", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+print({ source: "massive_stream", symbol: "DOOR", price: 100, stampMs: at(0), conditions: [32], participantMs: at(0), sec: 0 });
 
 check(
   "while the stream is live on the symbol, a 12 s-old standby print is REFUSED",
@@ -363,7 +370,7 @@ check(
 
 // A symbol the stream printed once and then left alone: the standby's 10 s-old print is
 // admitted, because the stream is no longer the one pricing that symbol.
-print({ source: "massive_stream", symbol: "QUIET", price: 100, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+print({ source: "massive_stream", symbol: "QUIET", price: 100, stampMs: at(0), conditions: [32], participantMs: at(0), sec: 0 });
 check(
   "once the stream has been quiet past MASSIVE_ACTIVE_MS, the slower door may price the symbol",
   tierCode(print({ source: "finnhub_stream", symbol: "QUIET", price: 100.5, stampMs: at(6), sec: 16 })),
@@ -372,24 +379,116 @@ check(
 
 check(
   "a quarantined outlier never becomes the anchor — the real price is still the reference",
-  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 122, stampMs: at(24), conditions: [37], participantMs: at(24), sec: 24 })),
+  tierCode(print({ source: "massive_stream", symbol: "MAG", price: 122, stampMs: at(24), conditions: [32], participantMs: at(24), sec: 24 })),
   ["use", null]
 );
 
 resetGate();
-print({ source: "massive_stream", symbol: "QNTX", price: 42.2, stampMs: at(0), conditions: [37], participantMs: at(0), sec: 0 });
+print({ source: "massive_stream", symbol: "QNTX", price: 42.2, stampMs: at(0), conditions: [32], participantMs: at(0), sec: 0 });
 check(
   "the 2026-11-10 QNT fill (41.34 against a 42.2 book) is quarantined, not filled",
-  tierCode(print({ source: "massive_stream", symbol: "QNTX", price: 41.34, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  tierCode(print({ source: "massive_stream", symbol: "QNTX", price: 41.34, stampMs: at(1), conditions: [32], participantMs: at(1), sec: 1 })),
   ["quarantine", "magnitude_jump"]
 );
 check("and the heartbeat counts it", gateSummary().byCode.magnitude_jump, 1);
 
 check(
   "an unknown symbol's first print is unaffected by another symbol's quarantine",
-  tierCode(print({ source: "massive_stream", symbol: "OTHER", price: 5, stampMs: at(1), conditions: [37], participantMs: at(1), sec: 1 })),
+  tierCode(print({ source: "massive_stream", symbol: "OTHER", price: 5, stampMs: at(1), conditions: [32], participantMs: at(1), sec: 1 })),
   ["use", null]
 );
+
+// ------------------------------------------------------------
+// PART 8 — THE REGULAR LAST SALE, AND NOTHING ELSE (2026-11-13, 10:58 ET)
+// ------------------------------------------------------------
+// Every frame below is a shape that closed a DART position this morning: an ADF report, an
+// under-100-share odd lot, and prints the tape itself labels as not the last sale. Each must
+// now be refused BEFORE it can reprice or stop anything, and a refused print must never become
+// the reference a later one is judged against.
+console.log("\n— Part 8: the 2026-11-13 bad prints —");
+resetGate();
+
+const venue = { exchange: 3, size: 300 };
+
+check(
+  "an ADF print (exchange 4) at full size — REFUSED",
+  tierCode(stream({ symbol: "ADF1", price: 178.08, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 4, size: 500 })),
+  ["refuse", "adf_print"]
+);
+
+check(
+  "the same price from a venue (exchange 3) — USED",
+  tierCode(stream({ symbol: "ADF2", price: 176.5, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, ...venue })),
+  ["use", null]
+);
+
+check(
+  "an 8-share venue print — REFUSED as an odd lot",
+  tierCode(stream({ symbol: "ODD1", price: 178.08, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 3, size: 8 })),
+  ["refuse", "odd_lot"]
+);
+
+check(
+  "99 shares — REFUSED (an odd lot whatever its conditions say)",
+  tierCode(stream({ symbol: "ODD2", price: 111.55, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 3, size: 99 })),
+  ["refuse", "odd_lot"]
+);
+
+check(
+  "100 shares — USED (the boundary is a round lot)",
+  tierCode(stream({ symbol: "ODD3", price: 111.2, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 3, size: 100 })),
+  ["use", null]
+);
+
+check(
+  "Average Price Trade (condition 2) at round-lot size — REFUSED",
+  tierCode(stream({ symbol: "AVG1", price: 29.9876, stampMs: SESSION, conditions: [2, 10, 41], participantMs: SESSION - 129, ...venue })),
+  ["refuse", "not_last_sale"]
+);
+
+check(
+  "Market Center Official Close (condition 15) — REFUSED",
+  tierCode(stream({ symbol: "AVG2", price: 72.1357, stampMs: SESSION, conditions: [15], participantMs: SESSION - 100, ...venue })),
+  ["refuse", "not_last_sale"]
+);
+
+check(
+  "Odd Lot condition 37 at round-lot size — REFUSED (the condition alone decides)",
+  tierCode(stream({ symbol: "AVG3", price: 25.5253, stampMs: SESSION, conditions: [37], participantMs: SESSION - 85, exchange: 3, size: 300 })),
+  ["refuse", "not_last_sale"]
+);
+
+check(
+  "the held-trade indicator 621 — REFUSED",
+  tierCode(stream({ symbol: "AVG4", price: 34.7752, stampMs: SESSION, conditions: [621], participantMs: SESSION - 118, ...venue })),
+  ["refuse", "not_last_sale"]
+);
+
+check(
+  "an Intermarket Sweep at round-lot size — USED",
+  tierCode(stream({ symbol: "OK1", price: 39.47, stampMs: SESSION, conditions: [14], participantMs: SESSION - 30, ...venue })),
+  ["use", null]
+);
+
+check(
+  "a regular trade carries no conditions at all — USED",
+  tierCode(stream({ symbol: "OK2", price: 39.09, stampMs: SESSION, conditions: [], participantMs: SESSION - 30, ...venue })),
+  ["use", null]
+);
+
+// A refused print may not become the anchor: the real market must stay the reference.
+resetGate();
+stream({ symbol: "ANCH", price: 178.08, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 4, size: 8 });
+check(
+  "a refused ADF odd lot never becomes the price a later print is judged against",
+  tierCode(stream({ symbol: "ANCH", price: 176.5, stampMs: SESSION, conditions: [], participantMs: SESSION - 20, ...venue })),
+  ["use", null]
+);
+
+resetGate();
+stream({ symbol: "CNT2", price: 178.08, stampMs: SESSION, conditions: [], participantMs: SESSION - 40, exchange: 4, size: 8 });
+check("the heartbeat counts the ADF refusal", gateSummary().byCode.adf_print, 1);
+check("and the odd lot it also was is counted under the first reason only", gateSummary().byCode.odd_lot ?? 0, 0);
 
 console.log(
   failures === 0

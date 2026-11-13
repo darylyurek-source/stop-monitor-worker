@@ -268,6 +268,11 @@ function printMeta(frame) {
     trfMs: stampToMs(frame.trft),
     trfId: frame.trfi != null ? Number(frame.trfi) : null,
     sequence: frame.q != null ? Number(frame.q) : null,
+    // The venue that reported the print (4 = FINRA ADF) and its size in shares. Both are
+    // carried so the ONE gate can refuse an off-exchange report or an odd lot before any
+    // rule sees the price (2026-11-13) — nothing here judges them.
+    exchange: frame.x != null ? Number(frame.x) : null,
+    size: frame.s != null ? Number(frame.s) : null,
   };
 }
 
@@ -288,6 +293,7 @@ function parseSnapshot(body) {
     price,
     stampMs: stampToMs(last?.t),
     exchange: last?.x != null ? Number(last.x) : null,
+    size: last?.s != null ? Number(last.s) : null,
     conditions: Array.isArray(last?.c) ? last.c.map(Number) : [],
   };
 }
