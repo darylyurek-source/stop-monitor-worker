@@ -49,33 +49,40 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: A at -$200, D at -$1,200 from 2026-11-13, B and C at -$1,700", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1700, -1700, -1200]);
+check("hard stop per system from 2026-11-13: A -$200, B -$1,200, C -$100, D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1200, -100, -1200]);
+// Every live account carries its own row; the shared -$1,700 survives only as the
+// fallback for a legacy record such as DART A's old "A" alias.
+check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
 check("protective policy: A and B arm at 55/65, C at its own 45/85, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("D").buffer], [55, 65, 45, 85, 350, 700]);
 check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
 check("Profit Protection: A(ANEW), B, C and D sell 25% at +$1,850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, null]);
 
-// --- 1. HARD STOP (A) ---------------------------------------------------------
-// long 200 sh, basis $20,000 at 91.50 -> P&L exactly -$1,700. Fees: commission
-// 1.28 + slippage 1.83 = 3.11.
-const t1 = tick("A", pos(), 91.5);
-check("hard stop fires at -$1,700", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 91.5, -1700]);
-check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.11, -1703.11]);
-
-// --- 1b. THE STOP LEVELS OF 2026-11-13 (A -$200, D -$1,200) -------------------
-// 200 shares on a $20,000 basis: $99.00 is exactly -$200, $94.00 exactly -$1,200
-// and $91.50 exactly -$1,700. Every loss level is pre-checked so no Vector
-// checkpoint can act and the hard stop is the only rule that can speak on these
-// prices.
+// Every loss level is pre-checked on the positions below, so no Vector checkpoint can
+// act and the hard stop is the only rule that can speak on these prices.
 const ALL_LOSS_LEVELS = Array.from({ length: 17 }, (_, i) => -100 * (i + 1));
 const deep = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS });
+
+// --- 1. HARD STOP (B at its own -$1,200) --------------------------------------
+// long 200 sh, basis $20,000 at $94.00 -> P&L exactly -$1,200. Fees: commission
+// 0.70 + SEC 0.52 + TAF 0.03 + clearing 0.04 = 1.30, slippage 1.88 -> 3.18.
+const t1 = tick("B", deep(), 94);
+check("hard stop fires at -$1,200", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 94, -1200]);
+check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.18, -1203.18]);
+
+// --- 1b. THE FOUR STOP LEVELS OF 2026-11-13 -----------------------------------
+// A -$200, B -$1,200, C -$100, D -$1,200. 200 shares on a $20,000 basis: $99.00 is
+// exactly -$200, $99.50 exactly -$100, $94.00 exactly -$1,200 and $91.50 exactly
+// -$1,700 (a level no live account runs any more).
 check("A closes at -$200", [tick("ANEW", deep(), 99).event, tick("ANEW", deep(), 99).gross_pl], ["realtime_stop_close", -200]);
-check("A holding just above -$200 is not stopped", [tick("ANEW", deep(), 99.5).action], ["hold"]);
-check("A also closes at -$1,200 and D closes there", [tick("ANEW", deep(), 94).event, tick("D", deep(), 94).event], ["realtime_stop_close", "realtime_stop_close"]);
-check("D is untouched at -$200", [tick("D", deep(), 99).action], ["hold"]);
-check("B and C are untouched at -$200 and at -$1,200", [tick("B", deep(), 99).action, tick("C", deep(), 99).action, tick("B", deep(), 94).action, tick("C", deep(), 94).action], ["hold", "hold", "hold", "hold"]);
-check("B and C still close at -$1,700", [tick("B", deep(), 91.5).event, tick("C", deep(), 91.5).event], ["realtime_stop_close", "realtime_stop_close"]);
+check("A holds just above -$200", [tick("ANEW", deep(), 99.5).action], ["hold"]);
+check("B closes at -$1,200", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
+check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
+check("C closes at -$100", [tick("C", deep(), 99.5).event, tick("C", deep(), 99.5).gross_pl], ["realtime_stop_close", -100]);
+check("C holds just above -$100", [tick("C", deep(), 99.8).action], ["hold"]);
+check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
+check("no account borrows another's stop: D untouched at -$200, A untouched at -$100", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
 // --- 2. PRESS 1 (B at +$250) --------------------------------------------------
 const t2 = tick("B", pos(), 101.25);
@@ -131,12 +138,13 @@ check(
 );
 
 // --- 6. DOWNSIDE VECTOR EXIT (score 80) --------------------------------------
-const t6 = tick("B", pos(), 94, { vectorScore: 80 });
+// B's stop is -$1,200, so this price is -$300: crossed checkpoints without the stop.
+const t6 = tick("B", pos(), 98.5, { vectorScore: 80 });
 check("downside Vector exit", [t6.action, t6.event, t6.vector_level, t6.patch.checked_loss_levels], ["exit", "vector_exit", -100, [-100]]);
 
 // --- 7. DOWNSIDE VECTOR HOLD (score 40) --------------------------------------
-const t7 = tick("B", pos(), 94, { vectorScore: 40 });
-check("downside hold records every level", [t7.action, t7.event, t7.patch.checked_loss_levels.length, t7.patch.checked_loss_levels[11]], ["hold", "vector_checkpoint_hold", 12, -1200]);
+const t7 = tick("B", pos(), 98.5, { vectorScore: 40 });
+check("downside hold records every level", [t7.action, t7.event, t7.patch.checked_loss_levels.length, t7.patch.checked_loss_levels[2]], ["hold", "vector_checkpoint_hold", 3, -300]);
 
 // --- 8. PROTECTIVE GIVEBACK ---------------------------------------------------
 // high-water $1,300, buffer $350 -> protected $950; P&L $940 breaches it.
@@ -172,8 +180,8 @@ check("halted account decides nothing", [t12.action, t12.halted, t12.patch], ["h
 check("halted account would otherwise stop out at this price", tick("B", pos(), 91.5).action, "exit");
 
 // --- 13. MISSING VECTOR IS AN EXPLICIT GAP, NEVER A GUESS --------------------
-const t13 = tick("B", pos(), 94);
-check("missing vector asks for it", [t13.action, t13.pending_step, t13.loss_levels.length], ["needs_vector", "downside_vector", 12]);
+const t13 = tick("B", pos(), 98.5);
+check("missing vector asks for it", [t13.action, t13.pending_step, t13.loss_levels.length], ["needs_vector", "downside_vector", 3]);
 
 // --- 14. SHORT SIDE FEES (press is a SELL for a short) -----------------------
 const t14 = tick("ANEW", pos({ side: "short" }), 98.75);

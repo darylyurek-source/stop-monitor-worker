@@ -137,9 +137,12 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
 
 // --- 5. stops, trail, vector, partial ----------------------------------------
 {
-  check("stop: B's hard stop", systemStop("B"), -1700);
-  const hard = decideTick({ system: "B", position: pos({}), price: 50 - 1701 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("stop: B's hard stop", systemStop("B"), -1200);
+  check("stop: C's hard stop", systemStop("C"), -100);
+  const hard = decideTick({ system: "B", position: pos({}), price: 50 - 1201 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("stop: hard stop closes", hard.exit_reason, "realtime_stop_close");
+  const justAbove = decideTick({ system: "B", position: pos({}), price: 50 - 1199 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("stop: just above the stop holds", justAbove.action, "hold");
 
   // Trail: active, extreme 60 on a long at 1.75% once peak is below +$900.
   const trail = decideTick({
