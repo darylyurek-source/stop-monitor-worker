@@ -156,15 +156,17 @@ export function ruleKeyFor(system, position) {
   return s === "C" ? "C_LEGACY" : s;
 }
 
-// cloneSystems.ts — per-system hard-loss stop. A -$200, B -$1,200, C -$1,200,
+// cloneSystems.ts — per-system hard-loss stop. A -$1,200, B -$1,200, C -$1,200,
 // D -$1,200. C's row was -$100 until 1:44:55 PM ET on 2026-11-13, when the owner
 // moved it to -$1,200 mid-session; the cancelled cutover to A's rules is what had
 // kept it at -$100, and C_LEGACY is still the only C row a position can resolve to
-// (the "C" alias carries the same number). The shared STOP below is only
+// (the "C" alias carries the same number). A's row was -$200 until 14:00:38 PM ET on
+// 2026-11-13, when the owner moved it to -$1,200 mid-session, open positions
+// included. The shared STOP below is only
 // the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-export const SYSTEM_HARD_STOP = { ANEW: -200, B: -1200, C: -1200, C_LEGACY: -1200, D: -1200 };
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -1200, C_LEGACY: -1200, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
