@@ -44,7 +44,7 @@ import {
   PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS,
   PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
   protectivePolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
-  vectorExitThreshold,
+  vectorExitThreshold, ruleKeyFor,
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
@@ -294,6 +294,13 @@ export function decideTick(args) {
     return { ...base, action: "skipped", reason: "already_closed" };
   }
 
+  // THE RULE KEY FOR THIS POSITION. The system's own row, except that a DART C
+  // position opened before its 2026-11-13 10:45 AM ET cutover reads C_LEGACY, so it
+  // keeps the rules it was opened under until it closes (see tickRules.ruleKeyFor).
+  // Only the three rules that changed for C resolve through it; the presses, Profit
+  // Protection, the +$2,000 auto-arm and the trail are C's own either way.
+  const ruleKey = ruleKeyFor(sys, pos);
+
   const side = pos.side;
   const shares = Number(pos.shares) || 0;
   const tcb = Number(pos.tcb) || 0;
@@ -308,7 +315,7 @@ export function decideTick(args) {
     protectiveActive && Number.isFinite(Number(pos.protective_high_water_pl))
       ? Number(pos.protective_high_water_pl)
       : null;
-  const protectiveBuffer = protectivePolicy(sys).buffer;
+  const protectiveBuffer = protectivePolicy(ruleKey).buffer;
   const protectiveBreach = oldHigh != null && pl <= oldHigh - protectiveBuffer;
 
   const peakForTrail = Math.max(Number(pos.peak_pl) || 0, pl);
@@ -337,7 +344,7 @@ export function decideTick(args) {
   const priceTrailBreach = !!(pt.active && pt.breach);
 
   // Rule 2 — TERMINAL stop. Precedence is cloneTick.ts's exact order.
-  const hardStop = systemStop(sys);
+  const hardStop = systemStop(ruleKey);
   if (pl <= hardStop || protectiveBreach || priceTrailBreach) {
     const reason = pl <= hardStop ? "realtime_stop_close" : priceTrailBreach ? "price_trail_stop" : "protective_stop";
     return {
@@ -419,9 +426,9 @@ export function decideTick(args) {
       const checkpoints = [...(pos.vector_checkpoints || [])];
       let exitVec = false;
       let vecLevel = 0;
-      // The system's own exit threshold: DART C carries its own row, every other
-      // account the shared 65 (tickRules.vectorExitThreshold).
-      const vecExit = vectorExitThreshold(sys);
+      // The position's own exit threshold: the shared 65, or 45 for a C position
+      // opened before its 2026-11-13 cutover (tickRules.vectorExitThreshold).
+      const vecExit = vectorExitThreshold(ruleKey);
 
       for (const L of newLevels) {
         checked.add(L);
@@ -500,7 +507,7 @@ export function decideTick(args) {
       };
     }
     const isActivation = !pos.profit_grid_active;
-    const vecExit = vectorExitThreshold(sys);
+    const vecExit = vectorExitThreshold(ruleKey);
     const decision = vectorScore >= vecExit ? "EXIT" : "HOLD";
     const profitCheckpoints = [...(pos.profit_checkpoints || [])];
     profitCheckpoints.push({

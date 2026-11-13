@@ -132,13 +132,39 @@ export function dPressSizeFor(free) {
   return Math.floor(Math.min(D_MAX_PRESS_USD, f));
 }
 
-// cloneSystems.ts — per-system hard-loss stop. Owner's direction, set 2026-11-12 ET
-// after the close, in force from the 2026-11-13 session: A -$200, B -$1,200,
-// C -$100, D -$1,200. Every live account now carries its own row, so the shared
-// STOP below is only the fallback for a system that is not listed (a legacy record
-// such as DART A's old 'A' alias). Nothing else about any account changed. It is the
+// ---------------------------------------------------------------------------
+// DART C's RULE CUTOVER — 2026-11-13, 10:45:00 AM ET (owner's direction).
+//
+// From that instant C is an exact copy of DART A: A's stock selection, A's side,
+// A's presses, A's Profit Protection, A's Protective Stop (stock 55 / market 65,
+// $350 giveback), A's Vector Exit (65) and A's Hard Loss Stop (-$200), with ONE
+// change of C's own — it does not buy when its stock qualifies; it waits for that
+// stock's own Vector to reach 55 and buys then, or never.
+//
+// A C position OPENED BEFORE the cutover keeps C's PREVIOUS rules until it closes
+// (Hard Loss Stop -$100, Protective Stop 45/85, Vector Exit 45). Every C position
+// opened at or after it runs the new rules. That is what ruleKeyFor() resolves per
+// position, and it is the only reason the C_LEGACY rows exist.
+// ---------------------------------------------------------------------------
+export const C_RULE_CUTOVER_ISO = "2026-11-13T15:45:00.000Z"; // 10:45:00 AM ET
+
+// The rule key for ONE position: the system's own row, except that a DART C
+// position opened before the cutover reads C_LEGACY. A row with no readable
+// entry_time is a NEW position and takes the new rules — never the looser old ones.
+export function ruleKeyFor(system, position) {
+  const s = String(system ?? "").trim().toUpperCase();
+  if (s !== "C") return s;
+  const t = Date.parse(position?.entry_time);
+  if (Number.isFinite(t) && t < Date.parse(C_RULE_CUTOVER_ISO)) return "C_LEGACY";
+  return "C";
+}
+
+// cloneSystems.ts — per-system hard-loss stop. A -$200, B -$1,200, D -$1,200. C is
+// -$200 from its 2026-11-13 10:45 AM ET cutover (it was -$100) and -$100 for a C
+// position opened before it. The shared STOP below is only the fallback for a system
+// that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-export const SYSTEM_HARD_STOP = { ANEW: -200, B: -1200, C: -100, D: -1200 };
+export const SYSTEM_HARD_STOP = { ANEW: -200, B: -1200, C: -200, C_LEGACY: -100, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -214,32 +240,45 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 // set plus its single buying-power-sized Press.
 const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
 
-// DART C's OWN Vector test (set 2026-11-11, after that day's close). From the next
-// session C is B's rule set exactly — presses, Profit Protection, the $2,000
-// auto-arm, the $350 giveback, the 1.75% trail, the hard stop, the 4:00 PM close —
-// with ONE change of its own: these two arming thresholds. Values are the winner of
-// the extended Vector sweep (2026-11-11): over C's own 230 recorded trades the live
-// 55/65 read -$24,410.69 and 45/85 reads -$147.11 with the exit at 45 — better in
-// BOTH weeks (+$5,811.42 Nov 2-6, -$5,958.53 Nov 9-11) — and stock 45 is an interior
-// optimum (50, 40, 25 and 65 all worse in both weeks). At 85 the market leg
-// saturates: market 85, 90, 95 and 100 give identical rows, so C arms on the stock
-// Vector alone. These are the identical numbers the Base44 copy must hold
+// DART C's TWO Vector tests (owner's direction, 2026-11-13).
+//
+// FROM THE 10:45 AM ET CUTOVER C IS AN EXACT COPY OF DART A, so it arms at A's own
+// thresholds — stock 55 / market 65 with the $350 giveback (C_NEW_RULE_SET below,
+// the same numbers as B_RULE_SET but a separate object because the read-only Vector
+// sweep mutates C's row in its own process).
+//
+// BEFORE the cutover a C position carries C's previous, tighter Vector test — stock
+// 45 / market 85, chosen by the extended Vector sweep on 2026-11-11 — for the rest
+// of its life (C_LEGACY_RULE_SET). A C position opened before 10:45 AM ET on
+// 2026-11-13 therefore keeps the rules it was opened under until it closes.
+// These are the identical numbers the Base44 copy must hold
 // (shared/protectiveStop.ts).
-export const C_STOCK_ARM = 45;
-export const C_MARKET_ARM = 85;
+export const C_STOCK_ARM = 55;
+export const C_MARKET_ARM = 65;
 
-const C_ONLY_RULE_SET = {
+// C's retired Vector test, kept only for a position opened before the cutover.
+export const C_LEGACY_STOCK_ARM = 45;
+export const C_LEGACY_MARKET_ARM = 85;
+
+const C_NEW_RULE_SET = {
   stockThreshold: C_STOCK_ARM,
   marketThreshold: C_MARKET_ARM,
+  buffer: 350,
+};
+
+const C_LEGACY_RULE_SET = {
+  stockThreshold: C_LEGACY_STOCK_ARM,
+  marketThreshold: C_LEGACY_MARKET_ARM,
   buffer: 350,
 };
 
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  // DART C — B's rule set with its own arming thresholds from 2026-11-11 after the
-  // close (was B_RULE_SET, i.e. 55/65, from 2026-11-10).
-  C: C_ONLY_RULE_SET,
+  // DART C — A's 55/65 from the 2026-11-13 10:45 AM ET cutover (it is an exact copy
+  // of DART A from then), and its retired 45/85 for a position opened before it.
+  C: C_NEW_RULE_SET,
+  C_LEGACY: C_LEGACY_RULE_SET,
   // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
   // doubled on D's own account; B, C and A keep $350).
   D: D_RULE_SET,
@@ -279,18 +318,17 @@ export function cProfitTrailPct(peakPl) {
 // ---------------------------------------------------------------------------
 export const VECTOR_THRESHOLD = 65;
 
-// DART C's OWN Vector Exit threshold (set 2026-11-11, after that day's close): the
-// score at which its downside checkpoints and its upside grid close the position.
-// Every other account reads VECTOR_THRESHOLD. This is the second half of C's ONE
-// change from B — the other half is its arming thresholds above — and it is the
-// same sweep's choice: at 45 C reads -$147.11, at 48 -$874, at 65 -$2,879. Moving
-// it converts Protective Stops into Vector Exits (across the three accounts 380 -> 309
-// Protective Stops, 91 -> 171 Vector Exits).
-export const C_VECTOR_EXIT = 45;
+// DART C's Vector Exit (owner's direction, 2026-11-13): FROM ITS 10:45 AM ET CUTOVER
+// C EXITS AT A'S OWN 65 — the shared VECTOR_THRESHOLD, so C has no row of its own any
+// more. A C position opened BEFORE the cutover keeps C's retired threshold of 45
+// (the extended Vector sweep's choice on 2026-11-11) until it closes, which is what
+// the C_LEGACY row carries.
+export const C_VECTOR_EXIT = 65;
+export const C_LEGACY_VECTOR_EXIT = 45;
 
-// Exported so a read-only study can sweep C's exit threshold without touching the
-// rule: the harness mutates this table in its own process, never in the worker.
-export const VECTOR_EXIT_BY_SYSTEM = { C: C_VECTOR_EXIT };
+// Exported so a read-only study can sweep a system's exit threshold without touching
+// the rule: the harness mutates this table in its own process, never in the worker.
+export const VECTOR_EXIT_BY_SYSTEM = { C_LEGACY: C_LEGACY_VECTOR_EXIT };
 
 // The Vector Exit threshold a system closes at: its own row, else the shared 65.
 export function vectorExitThreshold(system) {

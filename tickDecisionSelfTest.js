@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -49,11 +49,15 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system from 2026-11-13: A -$200, B -$1,200, C -$100, D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1200, -100, -1200]);
+check("hard stop per system: A -$200, B -$1,200, C -$200 (A's stop from its 2026-11-13 cutover), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1200, -200, -1200]);
+// A C position opened BEFORE the 10:45 AM ET cutover of 2026-11-13 keeps C's -$100.
+check("a pre-cutover C position resolves to C_LEGACY at -$100", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), systemStop("C_LEGACY")], ["C_LEGACY", -100]);
+check("a post-cutover C position (and a row with no entry_time) resolves to C at -$200", [ruleKeyFor("C", { entry_time: "2026-11-13T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C")], ["C", "C", -200]);
+check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("ANEW", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("D", {})], ["B", "ANEW", "D"]);
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A and B arm at 55/65, C at its own 45/85, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("D").buffer], [55, 65, 45, 85, 350, 700]);
+check("protective policy: A, B and C arm at 55/65, C's pre-cutover row at 45/85, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [55, 65, 55, 65, 350, 45, 85, 700]);
 check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
@@ -71,16 +75,22 @@ const t1 = tick("B", deep(), 94);
 check("hard stop fires at -$1,200", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 94, -1200]);
 check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.18, -1203.18]);
 
-// --- 1b. THE FOUR STOP LEVELS OF 2026-11-13 -----------------------------------
-// A -$200, B -$1,200, C -$100, D -$1,200. 200 shares on a $20,000 basis: $99.00 is
-// exactly -$200, $99.50 exactly -$100, $94.00 exactly -$1,200 and $91.50 exactly
-// -$1,700 (a level no live account runs any more).
+// --- 1b. THE FOUR STOP LEVELS, AND C'S CUTOVER (2026-11-13, 10:45 AM ET) ------
+// A -$200, B -$1,200, C -$200, D -$1,200. C ran -$100 until its cutover, so a C
+// position opened before it keeps -$100 (deep() below carries an October entry
+// time, so every unqualified C call here is the LEGACY row). 200 shares on a
+// $20,000 basis: $99.00 is exactly -$200, $99.50 exactly -$100, $94.00 exactly
+// -$1,200 and $91.50 exactly -$1,700 (a level no live account runs any more).
 check("A closes at -$200", [tick("ANEW", deep(), 99).event, tick("ANEW", deep(), 99).gross_pl], ["realtime_stop_close", -200]);
 check("A holds just above -$200", [tick("ANEW", deep(), 99.5).action], ["hold"]);
 check("B closes at -$1,200", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
 check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
-check("C closes at -$100", [tick("C", deep(), 99.5).event, tick("C", deep(), 99.5).gross_pl], ["realtime_stop_close", -100]);
-check("C holds just above -$100", [tick("C", deep(), 99.8).action], ["hold"]);
+check("a pre-cutover C position closes at -$100", [tick("C", deep(), 99.5).event, tick("C", deep(), 99.5).gross_pl], ["realtime_stop_close", -100]);
+check("a pre-cutover C position holds just above -$100", [tick("C", deep(), 99.8).action], ["hold"]);
+// A C position opened at or after the cutover runs A's own -$200 stop.
+const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-13T16:00:00.000Z" });
+check("a post-cutover C position closes at -$200 (A's stop)", [tick("C", cNew(), 99).event, tick("C", cNew(), 99).gross_pl], ["realtime_stop_close", -200]);
+check("a post-cutover C position holds just above -$200", [tick("C", cNew(), 99.5).action], ["hold"]);
 check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
 check("no account borrows another's stop: D untouched at -$200, A untouched at -$100", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
@@ -227,14 +237,14 @@ check("D sells the same quarter (D is B plus one press)", partialProfitPolicy("D
 check("C sells the same quarter from 2026-11-11 (C is B's rules exactly)", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
 check("D's single press is +$250, sized from buying power, trail at that press", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, true]);
-// C's OWN Vector test (45/85 from 2026-11-11, after the close) must not touch B's 55/65.
+// C's 2026-11-13 cutover: from then it is A, so it arms at 55/65 and exits at 65;
+// its pre-cutover row keeps the retired 45/85 and the exit at 45.
 check(
-  "C arms at 45/85 while B keeps 55/65",
-  [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
-  [45, 85, 55, 65]
+  "C arms at 55/65 from the cutover and its pre-cutover row at 45/85, never touching B",
+  [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
+  [55, 65, 45, 85, 55, 65]
 );
-// C's Vector Exit threshold is the other half of that one change.
-check("Vector Exit: C closes at 45, every other account at 65", [vectorExitThreshold("C"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [45, 65, 65, 65]);
+check("Vector Exit: C closes at 65 (A's), its pre-cutover row at 45, every other account 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [65, 45, 65, 65, 65]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;

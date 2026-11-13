@@ -32,7 +32,7 @@
 //
 // Paper only. USD. No state is held between calls.
 
-import { r2, unrealized, protectivePolicy } from "./tickRules.js";
+import { r2, unrealized, protectivePolicy, ruleKeyFor } from "./tickRules.js";
 import { computeStockVector, computeMarketVector } from "./vectorCore.js";
 
 // The score of the last bar, or null when the series cannot score it.
@@ -45,12 +45,17 @@ export function scoreLastBar(candles, side, entryPrice) {
 export function assessProtectiveTrigger(args) {
   const { system, position: pos, nowIso } = args || {};
   const sys = String(system ?? "").trim().toUpperCase();
-  const policy = protectivePolicy(sys);
+  // THE RULES THIS POSITION LIVES UNDER: its system's row, or C_LEGACY for a DART C
+  // position opened before that account's 2026-11-13 10:45 AM ET cutover — a stop is
+  // armed on the rules the position was opened with (tickRules.ruleKeyFor).
+  const ruleKey = ruleKeyFor(sys, pos);
+  const policy = protectivePolicy(ruleKey);
   const stockThreshold = policy.stockThreshold;
   const marketThreshold = policy.marketThreshold;
 
   const base = {
     system: sys,
+    rule_key: ruleKey,
     symbol: pos?.symbol ?? null,
     stock_threshold: stockThreshold,
     market_threshold: marketThreshold,

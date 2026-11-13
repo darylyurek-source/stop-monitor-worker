@@ -54,26 +54,34 @@ function check(name, actual, expected) {
 
 const assess = (system, position, extra) => assessProtectiveTrigger({ system, position, nowIso: NOW, ...(extra || {}) });
 
-// --- 1. THRESHOLDS ARE PER SYSTEM (C its own 45/85; A and B 55/65; D 55/65) --
-// DART C moved to 45/85 on 2026-11-11, after that day's close, from the extended
-// Vector sweep (live: protectiveStop.ts BY_SYSTEM).
-const holdC = assess("C", pos(), { stockScore: 44.99, marketScore: 84.99 });
-check("C holds just below 45/85", [holdC.action, holdC.event], ["hold", "protective_not_armed"]);
+// --- 1. THRESHOLDS ARE PER SYSTEM AND PER POSITION ---------------------------
+// DART C became an exact copy of DART A at its 2026-11-13 10:45:00 AM ET cutover
+// (15:45:00Z): from then it arms at A's 55/65. A C position OPENED BEFORE that
+// instant keeps C's retired 45/85 until it closes, which is what the legacy fixture
+// below pins (tickRules.ruleKeyFor / PROTECTIVE_BY_SYSTEM.C_LEGACY).
+const LEGACY_C = { entry_time: "2026-11-13T14:00:00.000Z" }; // 9:00 AM ET, before the cutover
+const NEW_C = { entry_time: "2026-11-13T16:00:00.000Z" }; // 11:00 AM ET, after it
+
+const holdC = assess("C", pos(NEW_C), { stockScore: 54.99, marketScore: 64.99 });
+check("a C position opened after the cutover holds just below 55/65", [holdC.action, holdC.event, holdC.rule_key], ["hold", "protective_not_armed", "C"]);
 
 const bars = [bar(100)];
-const armC = assess("C", pos(), { stockScore: 45, marketScore: 10, candles: bars });
-check("C arms at exactly stock 45", [armC.action, armC.triggered_by], ["activate", "stock"]);
+const armC = assess("C", pos(LEGACY_C), { stockScore: 45, marketScore: 10, candles: bars });
+check("a C position opened before the cutover still arms at exactly stock 45", [armC.action, armC.triggered_by, armC.rule_key], ["activate", "stock", "C_LEGACY"]);
 
 const sameForB = assess("B", pos(), { stockScore: 60, marketScore: 10, candles: bars });
-const sameForC = assess("C", pos(), { stockScore: 60, marketScore: 10, candles: bars });
-check("stock 60 arms B and C alike", [sameForB.action, sameForC.action], ["activate", "activate"]);
+const sameForC = assess("C", pos(NEW_C), { stockScore: 60, marketScore: 10, candles: bars });
+check("stock 60 arms B and a post-cutover C alike", [sameForB.action, sameForC.action], ["activate", "activate"]);
 
-// B's old market level no longer arms C; C needs the full 85.
-const market65C = assess("C", pos(), { stockScore: 10, marketScore: 65, candles: bars });
-check("market 65 alone no longer arms C", [market65C.action, market65C.event], ["hold", "protective_not_armed"]);
+// On A's row market 65 ALONE arms the new C; a legacy C position still needs 85.
+const market65C = assess("C", pos(NEW_C), { stockScore: 10, marketScore: 65, candles: bars });
+check("market 65 alone arms a post-cutover C (A's row)", [market65C.action, market65C.triggered_by], ["activate", "market"]);
 
-const marketOnly = assess("C", pos(), { stockScore: 10, marketScore: 85, candles: bars });
-check("market 85 alone arms C", [marketOnly.action, marketOnly.triggered_by], ["activate", "market"]);
+const market65Legacy = assess("C", pos(LEGACY_C), { stockScore: 10, marketScore: 65, candles: bars });
+check("market 65 alone does not arm a legacy C position", [market65Legacy.action, market65Legacy.event], ["hold", "protective_not_armed"]);
+
+const marketOnly = assess("C", pos(NEW_C), { stockScore: 10, marketScore: 85, candles: bars });
+check("market 85 arms C as well", [marketOnly.action, marketOnly.triggered_by], ["activate", "market"]);
 
 // A score with no bar under it cannot become a high-water: refuse, never arm at zero.
 const noBar = assess("C", pos(), { stockScore: 99, marketScore: 99 });
