@@ -136,10 +136,16 @@ export function dPressSizeFor(free) {
 // DART C — NO CUTOVER. The planned change that would have made C an exact copy of
 // DART A's rules was CANCELLED on 2026-11-13 at 10:50 AM ET, before it could run, so
 // C keeps the rule set it trades today, permanently and with no date attached:
-// Hard Loss Stop -$100, Protective Stop 45/85, Vector Exit 45, Profit Protection 25%
+// Protective Stop 45/85, Vector Exit 45, Profit Protection 25%
 // at +$1,850, the +$2,000 Automatic Hard Stop with its $350 giveback, B's three
 // presses, the trailing-stop ladder and the 4:00 PM close. Every C position — the
 // ones it holds now and every one it opens from here — resolves to C_LEGACY.
+//
+// C'S HARD LOSS STOP MOVED TO -$1,200 at 1:44:55 PM ET, Friday 2026-11-13, mid-session,
+// on the owner's direction; it was -$100. The level is read from SYSTEM_HARD_STOP on
+// every tick, so the C positions already open at that moment carry the new stop from
+// their next print — no record is rewritten. Nothing else on C, and nothing on A, B
+// or D, changed.
 //
 // The C rows in the tables below are kept ONLY so that a caller naming the account
 // ("C") resolves to those same numbers instead of a fallback. No rule key can reach
@@ -150,14 +156,15 @@ export function ruleKeyFor(system, position) {
   return s === "C" ? "C_LEGACY" : s;
 }
 
-// cloneSystems.ts — per-system hard-loss stop. A -$200, B -$1,200, C -$100,
-// D -$1,200. C's -$100 is permanent: the cutover that would have moved it to A's
-// -$200 was cancelled on 2026-11-13, so C_LEGACY is the only C row a position can
-// resolve to (the "C" alias carries the same number). The shared STOP below is only
+// cloneSystems.ts — per-system hard-loss stop. A -$200, B -$1,200, C -$1,200,
+// D -$1,200. C's row was -$100 until 1:44:55 PM ET on 2026-11-13, when the owner
+// moved it to -$1,200 mid-session; the cancelled cutover to A's rules is what had
+// kept it at -$100, and C_LEGACY is still the only C row a position can resolve to
+// (the "C" alias carries the same number). The shared STOP below is only
 // the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-export const SYSTEM_HARD_STOP = { ANEW: -200, B: -1200, C: -100, C_LEGACY: -100, D: -1200 };
+export const SYSTEM_HARD_STOP = { ANEW: -200, B: -1200, C: -1200, C_LEGACY: -1200, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
