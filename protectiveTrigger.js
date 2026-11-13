@@ -46,7 +46,7 @@ export function assessProtectiveTrigger(args) {
   const { system, position: pos, nowIso } = args || {};
   const sys = String(system ?? "").trim().toUpperCase();
   // THE RULES THIS POSITION LIVES UNDER: its system's row, or C_LEGACY for a DART C
-  // position opened before that account's 2026-11-13 10:45 AM ET cutover — a stop is
+  // position opened before that account's 2026-11-16 9:30 AM ET cutover — a stop is
   // armed on the rules the position was opened with (tickRules.ruleKeyFor).
   const ruleKey = ruleKeyFor(sys, pos);
   const policy = protectivePolicy(ruleKey);

@@ -295,7 +295,7 @@ export function decideTick(args) {
   }
 
   // THE RULE KEY FOR THIS POSITION. The system's own row, except that a DART C
-  // position opened before its 2026-11-13 10:45 AM ET cutover reads C_LEGACY, so it
+  // position opened before its 2026-11-16 9:30 AM ET cutover reads C_LEGACY, so it
   // keeps the rules it was opened under until it closes (see tickRules.ruleKeyFor).
   // Only the three rules that changed for C resolve through it; the presses, Profit
   // Protection, the +$2,000 auto-arm and the trail are C's own either way.
@@ -427,7 +427,7 @@ export function decideTick(args) {
       let exitVec = false;
       let vecLevel = 0;
       // The position's own exit threshold: the shared 65, or 45 for a C position
-      // opened before its 2026-11-13 cutover (tickRules.vectorExitThreshold).
+      // opened before its 2026-11-16 cutover (tickRules.vectorExitThreshold).
       const vecExit = vectorExitThreshold(ruleKey);
 
       for (const L of newLevels) {

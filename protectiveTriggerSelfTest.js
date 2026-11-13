@@ -55,12 +55,12 @@ function check(name, actual, expected) {
 const assess = (system, position, extra) => assessProtectiveTrigger({ system, position, nowIso: NOW, ...(extra || {}) });
 
 // --- 1. THRESHOLDS ARE PER SYSTEM AND PER POSITION ---------------------------
-// DART C became an exact copy of DART A at its 2026-11-13 10:45:00 AM ET cutover
-// (15:45:00Z): from then it arms at A's 55/65. A C position OPENED BEFORE that
-// instant keeps C's retired 45/85 until it closes, which is what the legacy fixture
-// below pins (tickRules.ruleKeyFor / PROTECTIVE_BY_SYSTEM.C_LEGACY).
-const LEGACY_C = { entry_time: "2026-11-13T14:00:00.000Z" }; // 9:00 AM ET, before the cutover
-const NEW_C = { entry_time: "2026-11-13T16:00:00.000Z" }; // 11:00 AM ET, after it
+// DART C becomes an exact copy of DART A at its Monday 2026-11-16 9:30:00 AM ET
+// cutover (14:30:00Z): from then it arms at A's 55/65. A C position OPENED BEFORE
+// that instant keeps C's retired 45/85 until it closes, which is what the legacy
+// fixture below pins (tickRules.ruleKeyFor / PROTECTIVE_BY_SYSTEM.C_LEGACY).
+const LEGACY_C = { entry_time: "2026-11-13T14:00:00.000Z" }; // Fri 9:00 AM ET, before the cutover
+const NEW_C = { entry_time: "2026-11-16T16:00:00.000Z" }; // Mon 11:00 AM ET, after it
 
 const holdC = assess("C", pos(NEW_C), { stockScore: 54.99, marketScore: 64.99 });
 check("a C position opened after the cutover holds just below 55/65", [holdC.action, holdC.event, holdC.rule_key], ["hold", "protective_not_armed", "C"]);

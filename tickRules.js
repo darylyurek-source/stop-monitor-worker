@@ -133,20 +133,28 @@ export function dPressSizeFor(free) {
 }
 
 // ---------------------------------------------------------------------------
-// DART C's RULE CUTOVER — 2026-11-13, 10:45:00 AM ET (owner's direction).
+// DART C's RULE CUTOVER — MONDAY 2026-11-16, 9:30:00 AM ET (owner's direction,
+// revised 2026-11-13 before the open: the Vector-55 wait moved to DART A).
 //
-// From that instant C is an exact copy of DART A: A's stock selection, A's side,
-// A's presses, A's Profit Protection, A's Protective Stop (stock 55 / market 65,
-// $350 giveback), A's Vector Exit (65) and A's Hard Loss Stop (-$200), with ONE
-// change of C's own — it does not buy when its stock qualifies; it waits for that
-// stock's own Vector to reach 55 and buys then, or never.
+// From that instant — the Monday open — C is an exact copy of DART A's rules as they
+// stand today, WITHOUT the wait: A's stock selection (the 5 Minute Delay
+// measurement), A's side (the permanent reversal), A's presses, A's Profit
+// Protection (25% at +$1,850), A's Protective Stop (stock 55 / market 65, $350
+// giveback), A's Automatic Hard Stop (+$2,000, $350 giveback), A's Vector Exit (65),
+// A's Hard Loss Stop (-$200) and the 4:00 PM close.
 //
-// A C position OPENED BEFORE the cutover keeps C's PREVIOUS rules until it closes
+// THE WAIT LIVES ON DART A, not on C: from the same Monday open a stock that
+// qualifies for A is not bought — A watches that stock's own Vector and enters only
+// when it reaches 55, or never (Base44's shared/vectorEntry.ts, the entry path; the
+// engine has no part in it).
+//
+// A C POSITION OPENED BEFORE the cutover keeps C's PREVIOUS rules until it closes
 // (Hard Loss Stop -$100, Protective Stop 45/85, Vector Exit 45). Every C position
 // opened at or after it runs the new rules. That is what ruleKeyFor() resolves per
-// position, and it is the only reason the C_LEGACY rows exist.
+// position, and it is the only reason the C_LEGACY rows exist. Nothing changes on
+// Nov 13 itself: every C position opened today is still before the cutover.
 // ---------------------------------------------------------------------------
-export const C_RULE_CUTOVER_ISO = "2026-11-13T15:45:00.000Z"; // 10:45:00 AM ET
+export const C_RULE_CUTOVER_ISO = "2026-11-16T14:30:00.000Z"; // Mon 9:30:00 AM ET
 
 // The rule key for ONE position: the system's own row, except that a DART C
 // position opened before the cutover reads C_LEGACY. A row with no readable
@@ -160,7 +168,7 @@ export function ruleKeyFor(system, position) {
 }
 
 // cloneSystems.ts — per-system hard-loss stop. A -$200, B -$1,200, D -$1,200. C is
-// -$200 from its 2026-11-13 10:45 AM ET cutover (it was -$100) and -$100 for a C
+// -$200 from its 2026-11-16 9:30 AM ET cutover (it was -$100) and -$100 for a C
 // position opened before it. The shared STOP below is only the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
@@ -240,17 +248,18 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 // set plus its single buying-power-sized Press.
 const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
 
-// DART C's TWO Vector tests (owner's direction, 2026-11-13).
+// DART C's TWO Vector tests (owner's direction, revised 2026-11-13).
 //
-// FROM THE 10:45 AM ET CUTOVER C IS AN EXACT COPY OF DART A, so it arms at A's own
-// thresholds — stock 55 / market 65 with the $350 giveback (C_NEW_RULE_SET below,
-// the same numbers as B_RULE_SET but a separate object because the read-only Vector
-// sweep mutates C's row in its own process).
+// FROM THE MONDAY 2026-11-16 9:30 AM ET CUTOVER C IS AN EXACT COPY OF DART A's
+// rules, so it arms at A's own thresholds — stock 55 / market 65 with the $350
+// giveback (C_NEW_RULE_SET below, the same numbers as B_RULE_SET but a separate
+// object because the read-only Vector sweep mutates C's row in its own process).
 //
 // BEFORE the cutover a C position carries C's previous, tighter Vector test — stock
 // 45 / market 85, chosen by the extended Vector sweep on 2026-11-11 — for the rest
-// of its life (C_LEGACY_RULE_SET). A C position opened before 10:45 AM ET on
-// 2026-11-13 therefore keeps the rules it was opened under until it closes.
+// of its life (C_LEGACY_RULE_SET). A C position opened before 9:30 AM ET on
+// 2026-11-16 therefore keeps the rules it was opened under until it closes — every
+// position C holds today included.
 // These are the identical numbers the Base44 copy must hold
 // (shared/protectiveStop.ts).
 export const C_STOCK_ARM = 55;
@@ -275,8 +284,8 @@ const C_LEGACY_RULE_SET = {
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
   B: B_RULE_SET,
-  // DART C — A's 55/65 from the 2026-11-13 10:45 AM ET cutover (it is an exact copy
-  // of DART A from then), and its retired 45/85 for a position opened before it.
+  // DART C — A's 55/65 from the 2026-11-16 9:30 AM ET cutover (it is an exact copy
+  // of DART A's rules from then), and its retired 45/85 for a position opened before.
   C: C_NEW_RULE_SET,
   C_LEGACY: C_LEGACY_RULE_SET,
   // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
@@ -318,9 +327,9 @@ export function cProfitTrailPct(peakPl) {
 // ---------------------------------------------------------------------------
 export const VECTOR_THRESHOLD = 65;
 
-// DART C's Vector Exit (owner's direction, 2026-11-13): FROM ITS 10:45 AM ET CUTOVER
-// C EXITS AT A'S OWN 65 — the shared VECTOR_THRESHOLD, so C has no row of its own any
-// more. A C position opened BEFORE the cutover keeps C's retired threshold of 45
+// DART C's Vector Exit (owner's direction, 2026-11-13): FROM ITS MONDAY 2026-11-16
+// 9:30 AM ET CUTOVER C EXITS AT A'S OWN 65 — the shared VECTOR_THRESHOLD, so C has no
+// row of its own any more. A C position opened BEFORE the cutover keeps C's 45
 // (the extended Vector sweep's choice on 2026-11-11) until it closes, which is what
 // the C_LEGACY row carries.
 export const C_VECTOR_EXIT = 65;

@@ -49,10 +49,10 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: A -$200, B -$1,200, C -$200 (A's stop from its 2026-11-13 cutover), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1200, -200, -1200]);
-// A C position opened BEFORE the 10:45 AM ET cutover of 2026-11-13 keeps C's -$100.
+check("hard stop per system: A -$200, B -$1,200, C -$200 (A's stop from its 2026-11-16 cutover), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1200, -200, -1200]);
+// A C position opened BEFORE the Monday 2026-11-16 9:30 AM ET cutover keeps C's -$100.
 check("a pre-cutover C position resolves to C_LEGACY at -$100", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), systemStop("C_LEGACY")], ["C_LEGACY", -100]);
-check("a post-cutover C position (and a row with no entry_time) resolves to C at -$200", [ruleKeyFor("C", { entry_time: "2026-11-13T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C")], ["C", "C", -200]);
+check("a post-cutover C position (and a row with no entry_time) resolves to C at -$200", [ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C")], ["C", "C", -200]);
 check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("ANEW", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("D", {})], ["B", "ANEW", "D"]);
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
@@ -75,7 +75,7 @@ const t1 = tick("B", deep(), 94);
 check("hard stop fires at -$1,200", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 94, -1200]);
 check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.18, -1203.18]);
 
-// --- 1b. THE FOUR STOP LEVELS, AND C'S CUTOVER (2026-11-13, 10:45 AM ET) ------
+// --- 1b. THE FOUR STOP LEVELS, AND C'S CUTOVER (2026-11-16, 9:30 AM ET) -------
 // A -$200, B -$1,200, C -$200, D -$1,200. C ran -$100 until its cutover, so a C
 // position opened before it keeps -$100 (deep() below carries an October entry
 // time, so every unqualified C call here is the LEGACY row). 200 shares on a
@@ -88,7 +88,7 @@ check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
 check("a pre-cutover C position closes at -$100", [tick("C", deep(), 99.5).event, tick("C", deep(), 99.5).gross_pl], ["realtime_stop_close", -100]);
 check("a pre-cutover C position holds just above -$100", [tick("C", deep(), 99.8).action], ["hold"]);
 // A C position opened at or after the cutover runs A's own -$200 stop.
-const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-13T16:00:00.000Z" });
+const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
 check("a post-cutover C position closes at -$200 (A's stop)", [tick("C", cNew(), 99).event, tick("C", cNew(), 99).gross_pl], ["realtime_stop_close", -200]);
 check("a post-cutover C position holds just above -$200", [tick("C", cNew(), 99.5).action], ["hold"]);
 check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
@@ -237,7 +237,7 @@ check("D sells the same quarter (D is B plus one press)", partialProfitPolicy("D
 check("C sells the same quarter from 2026-11-11 (C is B's rules exactly)", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
 check("D's single press is +$250, sized from buying power, trail at that press", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, true]);
-// C's 2026-11-13 cutover: from then it is A, so it arms at 55/65 and exits at 65;
+// C's 2026-11-16 cutover: from then it is A, so it arms at 55/65 and exits at 65;
 // its pre-cutover row keeps the retired 45/85 and the exit at 45.
 check(
   "C arms at 55/65 from the cutover and its pre-cutover row at 45/85, never touching B",
