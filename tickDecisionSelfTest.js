@@ -49,7 +49,7 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: D doubled to -$3,400 on 2026-11-11", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1700, -1700, -1700, -3400]);
+check("hard stop per system: A at -$200, D at -$1,200 from 2026-11-13, B and C at -$1,700", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-200, -1700, -1700, -1200]);
 check("protective policy: A and B arm at 55/65, C at its own 45/85, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("D").buffer], [55, 65, 45, 85, 350, 700]);
 check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
@@ -62,6 +62,20 @@ check("Profit Protection: A(ANEW), B, C and D sell 25% at +$1,850; E and the 'A'
 const t1 = tick("A", pos(), 91.5);
 check("hard stop fires at -$1,700", [t1.action, t1.event, t1.exit_price, t1.gross_pl], ["exit", "realtime_stop_close", 91.5, -1700]);
 check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.11, -1703.11]);
+
+// --- 1b. THE STOP LEVELS OF 2026-11-13 (A -$200, D -$1,200) -------------------
+// 200 shares on a $20,000 basis: $99.00 is exactly -$200, $94.00 exactly -$1,200
+// and $91.50 exactly -$1,700. Every loss level is pre-checked so no Vector
+// checkpoint can act and the hard stop is the only rule that can speak on these
+// prices.
+const ALL_LOSS_LEVELS = Array.from({ length: 17 }, (_, i) => -100 * (i + 1));
+const deep = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS });
+check("A closes at -$200", [tick("ANEW", deep(), 99).event, tick("ANEW", deep(), 99).gross_pl], ["realtime_stop_close", -200]);
+check("A holding just above -$200 is not stopped", [tick("ANEW", deep(), 99.5).action], ["hold"]);
+check("A also closes at -$1,200 and D closes there", [tick("ANEW", deep(), 94).event, tick("D", deep(), 94).event], ["realtime_stop_close", "realtime_stop_close"]);
+check("D is untouched at -$200", [tick("D", deep(), 99).action], ["hold"]);
+check("B and C are untouched at -$200 and at -$1,200", [tick("B", deep(), 99).action, tick("C", deep(), 99).action, tick("B", deep(), 94).action, tick("C", deep(), 94).action], ["hold", "hold", "hold", "hold"]);
+check("B and C still close at -$1,700", [tick("B", deep(), 91.5).event, tick("C", deep(), 91.5).event], ["realtime_stop_close", "realtime_stop_close"]);
 
 // --- 2. PRESS 1 (B at +$250) --------------------------------------------------
 const t2 = tick("B", pos(), 101.25);

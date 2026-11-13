@@ -132,11 +132,13 @@ export function dPressSizeFor(free) {
   return Math.floor(Math.min(D_MAX_PRESS_USD, f));
 }
 
-// cloneSystems.ts — per-system hard-loss stop override. DART D's three stops were
-// doubled on 2026-11-11, on D's own account only: its hard-loss stop is -$3,400
-// instead of the shared -$1,700. No other system overrides the shared stop, so
-// A, B and C keep -$1,700.
-export const SYSTEM_HARD_STOP = { D: -3400 };
+// cloneSystems.ts — per-system hard-loss stop override. DART A (ANEW) closes at
+// -$200 (owner's direction, set 2026-11-12 after the close, in force from the
+// 2026-11-13 session); DART D closes at -$1,200 (adopted 2026-11-12 for the
+// 2026-11-13 session; D ran -$3,400 on Nov 11 and Nov 12 only). B and C keep the
+// shared -$1,700. Nothing else about any account changed. It is the same table
+// Base44 resolves, so the two engines cannot part company on it.
+export const SYSTEM_HARD_STOP = { ANEW: -200, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
