@@ -138,11 +138,11 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
 // --- 5. stops, trail, vector, partial ----------------------------------------
 {
   check("stop: B's hard stop", systemStop("B"), -1200);
-  // DART C's hard stop moved from -$100 to -$1,200 at 1:44:55 PM ET on 2026-11-13, on
+  // DART C's hard stop moved from -$1,200 to -$300 on 2026-11-15 (the owner's rule 9), on
   // every position and every date (tickRules.ruleKeyFor sends C to C_LEGACY, whose
-  // alias "C" carries the same -$1,200). Nothing else on C, or on any other DART, moved.
-  check("stop: C's hard stop is -$1,200", systemStop("C"), -1200);
-  check("stop: C_LEGACY carries the same -$1,200", systemStop("C_LEGACY"), -1200);
+  // alias "C" carries the same -$300). Nothing else on C, or on any other DART, moved.
+  check("stop: C's hard stop is -$300", systemStop("C"), -300);
+  check("stop: C_LEGACY carries the same -$300", systemStop("C_LEGACY"), -300);
   const hard = decideTick({ system: "B", position: pos({}), price: 50 - 1201 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("stop: hard stop closes", hard.exit_reason, "realtime_stop_close");
   const justAbove = decideTick({ system: "B", position: pos({}), price: 50 - 1199 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
@@ -163,10 +163,10 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Profit Protection: B, A (ANEW), C and D sell 25% once at +$1,850. C carries it from
-  // 2026-11-11 after the close: C is B's rules exactly, with its own Vector test as the
-  // only change. E was removed from the engine on 2026-11-10 and has no row anywhere.
-  check("partial: C takes the same quarter at +$1,850", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
+  // Profit Protection: B, A (ANEW) and D sell 25% once at +$1,850. C sells its quarter at
+  // +$850 from 2026-11-15 (the owner's rule 6). E was removed from the engine on
+  // 2026-11-10 and has no row anywhere.
+  check("partial: C takes a quarter at +$850", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
   check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
   check("partial: D takes the same quarter at +$1,850", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
   check("partial: E has no row", partialProfitPolicy("E"), null);
