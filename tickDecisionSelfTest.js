@@ -49,19 +49,20 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: A -$1,200 (raised from -$200 at 14:00:38 PM ET on 2026-11-13), B -$1,200, C -$1,200 (raised from -$100 at 1:44:55 PM ET 2026-11-13), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -1200, -1200]);
+check("hard stop per system: A -$1,200, B -$1,200, C -$300 (2026-11-15, the owner's rule 9), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -300, -1200]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
-// with none — resolves to C_LEGACY at -$1,200, and the "C" alias carries the same number.
-check("every C position resolves to C_LEGACY at -$1,200", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -1200, -1200]);
+// with none — resolves to C_LEGACY, whose hard stop is -$300 from 2026-11-15 (the
+// owner's rule 9); the "C" alias carries the same number.
+check("every C position resolves to C_LEGACY at -$300", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -300, -300]);
 check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("ANEW", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("D", {})], ["B", "ANEW", "D"]);
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A and B arm at 55/65, C at its own 45/85 on both C rows, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [55, 65, 45, 85, 350, 45, 85, 700]);
+check("protective policy: A and B arm at 55/65, C can never arm (101/101, Protective Stop removed 2026-11-15) and gives back $250, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [55, 65, 101, 101, 250, 101, 101, 700]);
 check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
-check("Profit Protection: A(ANEW), B, C and D sell 25% at +$1,850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, null]);
+check("Profit Protection: A(ANEW), B and D sell 25% at +$1,850, C sells 25% at +$850 (2026-11-15); E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, null]);
 
 // Every loss level is pre-checked on the positions below, so no Vector checkpoint can
 // act and the hard stop is the only rule that can speak on these prices.
@@ -87,13 +88,13 @@ check("A holds just above -$1,200", [tick("ANEW", deep(), 94.5).action], ["hold"
 check("A no longer closes at -$200", [tick("ANEW", deep(), 99).action, tick("ANEW", deep(), 99.5).action], ["hold", "hold"]);
 check("B closes at -$1,200", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
 check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
-check("C closes at -$1,200", [tick("C", deep(), 94).event, tick("C", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
-check("C holds just above -$1,200", [tick("C", deep(), 94.5).action], ["hold"]);
-check("C no longer closes at -$100", [tick("C", deep(), 99.5).action, tick("C", deep(), 99.8).action], ["hold", "hold"]);
+check("C closes at -$300 (the owner's rule 9, 2026-11-15)", [tick("C", deep(), 98.5).event, tick("C", deep(), 98.5).gross_pl], ["realtime_stop_close", -300]);
+check("C holds just above -$300", [tick("C", deep(), 98.55).action], ["hold"]);
+check("C no longer closes at -$1,200", [tick("C", deep(), 94).action], ["hold"]);
 // A C position opened on ANY later date runs the same -$1,200 — there is no cutover.
 const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
-check("a later C position closes at the same -$1,200", [tick("C", cNew(), 94).event, tick("C", cNew(), 94).gross_pl], ["realtime_stop_close", -1200]);
-check("a later C position holds just above -$1,200 and closes at -$1,200", [tick("C", cNew(), 94.5).action, tick("C", cNew(), 94).action], ["hold", "exit"]);
+check("a later C position closes at the same -$300", [tick("C", cNew(), 98.5).event, tick("C", cNew(), 98.5).gross_pl], ["realtime_stop_close", -300]);
+check("a later C position holds just above -$300 and closes at -$300", [tick("C", cNew(), 98.55).action, tick("C", cNew(), 98.5).action], ["hold", "exit"]);
 check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
 check("no account borrows another's stop: only each one's own -$1,200 closes it", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
@@ -252,21 +253,22 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, B, C and D all arm at +$2,000 (C and D's giveback is their own row: $350, $700 for D)", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 2000, 2000]);
+check("A, B and D arm at +$2,000; C arms at +$1,000 (the owner's rule 8, 2026-11-15) with its own $250 giveback", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 1000, 2000]);
 check("B sells 25% once at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
 check("A sells the same quarter (A is B plus the delay)", partialProfitPolicy("ANEW"), { threshold: 1850, fraction: 0.25 });
 check("D sells the same quarter (D is B plus one press)", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
-check("C sells the same quarter from 2026-11-11 (C is B's rules exactly)", partialProfitPolicy("C"), { threshold: 1850, fraction: 0.25 });
+check("C sells a quarter at +$850 from 2026-11-15 (the owner's rule 6)", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
 check("D's single press is +$250, sized from buying power, trail at that press", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, true]);
-// C's cutover to A's rules was CANCELLED 2026-11-13, so C arms at its own 45/85 and
-// exits at its own 45 on every C position, and B is never touched by it.
+// The Protective Stop was REMOVED from C on 2026-11-15 (the owner's rule 9) and C has
+// no Vector Exit of any kind (answer 3): both thresholds are unreachable on both C rows,
+// so neither rule can act on a C position. B and D are never touched by it.
 check(
-  "C arms at its own 45/85 on both C rows, never touching B's 55/65",
+  "C can never arm and can never Vector-exit (101/101 on both C rows), never touching B's 55/65",
   [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
-  [45, 85, 45, 85, 55, 65]
+  [101, 101, 101, 101, 55, 65]
 );
-check("Vector Exit: C closes at 45 on both C rows, every other account 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [45, 45, 65, 65, 65]);
+check("Vector Exit: C can never fire (101 on both C rows), every other account 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [101, 101, 65, 65, 65]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;
