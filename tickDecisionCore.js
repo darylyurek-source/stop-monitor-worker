@@ -43,7 +43,7 @@ import {
   r2, orderCost, slippageCost, unrealized,
   PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS,
   PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
-  protectivePolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
+  protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
   vectorExitThreshold, ruleKeyFor,
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
@@ -324,9 +324,14 @@ export function decideTick(args) {
 
   const priorPatches = [];
 
-  // Press 2 activated the trail: the write happens on this tick, before any stop is
-  // evaluated, and can never itself breach.
-  if (!pt.active && pos.pressed_2r) {
+  // Press 2 activates the trail for A, B and D. DART C's trail ARMS AT +$500 of peak
+  // P&L instead, with or without a press, and it has none below +$500 (2026-11-15, the
+  // owner's rule 7). The write happens on this tick, before any stop is evaluated, and
+  // can never itself breach.
+  const trailArmsNow = ruleKey === "C_LEGACY"
+    ? (!pt.active && peakForTrail >= 500)
+    : (!pt.active && pos.pressed_2r);
+  if (trailArmsNow) {
     priorPatches.push({
       price_trail_active: true,
       price_trail_extreme: r2(price),
@@ -341,6 +346,21 @@ export function decideTick(args) {
       pct: tierPct == null ? PRICE_TRAIL_PCT : tierPct,
     };
   }
+  // DART C'S AUTOMATIC HARD STOP (2026-11-15, the owner's rule 8): C arms at +$1,000 —
+  // its ONLY arming level, because the Protective Stop was removed from C — and the
+  // giveback it then enforces is the $250 in C's row (protectivePolicy buffer). Armed
+  // here as a state write so every later tick measures the giveback from this high-water.
+  if (ruleKey === "C_LEGACY" && !protectiveActive) {
+    const cArm = autoArmPolicy(sys);
+    if (Number.isFinite(cArm) && pl >= cArm) {
+      priorPatches.push({
+        protective_stop_active: true,
+        protective_high_water_pl: r2(pl),
+        protective_triggered_time: nowIso,
+      });
+    }
+  }
+
   const priceTrailBreach = !!(pt.active && pt.breach);
 
   // Rule 2 — TERMINAL stop. Precedence is cloneTick.ts's exact order.
@@ -649,7 +669,8 @@ export function decideTick(args) {
     const pressLevel = isPress3 ? "3R" : isPress2 ? "2R" : "1R";
     // The share-price trail starts at Press 2, or — on a single-press system — at its
     // one and only press.
-    const activatesTrail = isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3);
+    // A press never arms C's trail: C's trail is its own +$500 peak-P&L rule.
+    const activatesTrail = ruleKey !== "C_LEGACY" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
     const pressEntry = {
       timestamp: nowIso,
       level: pressLevel,
