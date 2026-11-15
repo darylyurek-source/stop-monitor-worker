@@ -55,22 +55,24 @@ function check(name, actual, expected) {
 const assess = (system, position, extra) => assessProtectiveTrigger({ system, position, nowIso: NOW, ...(extra || {}) });
 
 // --- 1. THRESHOLDS ARE PER SYSTEM, AND C NEVER CUT OVER ----------------------
-// DART C's cutover to A's 55/65 was CANCELLED on 2026-11-13 before it ran, so EVERY C
-// position — whatever its entry time — arms at C's own 45/85 and resolves to the
-// C_LEGACY rule key (tickRules.ruleKeyFor / PROTECTIVE_BY_SYSTEM.C).
+// DART C's cutover to A's 55/65 was CANCELLED on 2026-11-13, and on 2026-11-15 the
+// PROTECTIVE STOP WAS REMOVED FROM C altogether (the owner's rule 9): its row's arming
+// thresholds are 101/101, so no Vector score can ever arm a C position. Every C position
+// still resolves to the C_LEGACY rule key (tickRules.ruleKeyFor / PROTECTIVE_BY_SYSTEM.C).
 const LEGACY_C = { entry_time: "2026-11-13T14:00:00.000Z" }; // Fri 9:00 AM ET
 const NEW_C = { entry_time: "2026-11-16T16:00:00.000Z" }; // a week later — same rules
 
 const holdC = assess("C", pos(NEW_C), { stockScore: 44.99, marketScore: 84.99 });
-check("a C position holds just below its own 45/85", [holdC.action, holdC.event, holdC.rule_key], ["hold", "protective_not_armed", "C_LEGACY"]);
+check("a C position holds below 45/85", [holdC.action, holdC.event, holdC.rule_key], ["hold", "protective_not_armed", "C_LEGACY"]);
 
 const bars = [bar(100)];
-const armC = assess("C", pos(LEGACY_C), { stockScore: 45, marketScore: 10, candles: bars });
-check("a C position arms at exactly stock 45", [armC.action, armC.triggered_by, armC.rule_key], ["activate", "stock", "C_LEGACY"]);
+// The high-water mechanics below are exercised on DART B, which still arms (C no longer does).
+const armC = assess("B", pos(), { stockScore: 60, marketScore: 10, candles: bars });
+check("a B position arms at stock 60", [armC.action, armC.triggered_by, armC.rule_key], ["activate", "stock", "B"]);
 
 const sameForB = assess("B", pos(), { stockScore: 60, marketScore: 10, candles: bars });
 const sameForC = assess("C", pos(NEW_C), { stockScore: 60, marketScore: 10, candles: bars });
-check("stock 60 arms B (55/65) and C (45/85) alike", [sameForB.action, sameForC.action], ["activate", "activate"]);
+check("stock 60 arms B (55/65) but never C", [sameForB.action, sameForC.action], ["activate", "hold"]);
 
 // C's market leg still needs 85: 65 alone arms B and A, never C, on any date.
 const market65C = assess("C", pos(NEW_C), { stockScore: 10, marketScore: 65, candles: bars });
@@ -80,10 +82,13 @@ const market65B = assess("B", pos(), { stockScore: 10, marketScore: 65, candles:
 check("market 65 alone still arms B", [market65B.action, market65B.triggered_by], ["activate", "market"]);
 
 const marketOnly = assess("C", pos(NEW_C), { stockScore: 10, marketScore: 85, candles: bars });
-check("market 85 arms C", [marketOnly.action, marketOnly.triggered_by], ["activate", "market"]);
+check("market 85 no longer arms C", [marketOnly.action, marketOnly.event], ["hold", "protective_not_armed"]);
+// 2026-11-15, the owner's rule 9: a perfect score on both legs still cannot arm C.
+const neverC = assess("C", pos(LEGACY_C), { stockScore: 100, marketScore: 100, candles: bars });
+check("C NEVER arms: the Protective Stop is removed from C", [neverC.action, neverC.event, neverC.patch], ["hold", "protective_not_armed", undefined]);
 
 // A score with no bar under it cannot become a high-water: refuse, never arm at zero.
-const noBar = assess("C", pos(), { stockScore: 99, marketScore: 99 });
+const noBar = assess("B", pos(), { stockScore: 99, marketScore: 99 });
 check("a score without a bar refuses to arm", [noBar.action, noBar.reason, noBar.patch], ["no_reference_price", "no_bar_extreme", undefined]);
 
 // --- 2. HIGH-WATER COMES FROM THE BAR'S EXTREME, NOT THE PRICE --------------
