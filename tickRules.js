@@ -166,7 +166,10 @@ export function ruleKeyFor(system, position) {
 // the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -1200, C_LEGACY: -1200, D: -1200 };
+// DART C (2026-11-15, the owner's rule 9): C's Hard Loss Stop is -$300, decided on the
+// two-print rule the price gate already enforces. C_LEGACY carries the same number — it
+// is the only C row a position can resolve to. A, B and D are NOT changed.
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -300, C_LEGACY: -300, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -192,7 +195,8 @@ export const SYSTEM_PARTIAL_PROFIT = {
   // the next session, so it carries B's Profit Protection — 25% once at +$1,850.
   // The row removed on 2026-11-06 is restored; its one remaining difference from B
   // is now the Vector test below (C's own arming thresholds and its own Vector Exit).
-  C: { threshold: 1850, fraction: 0.25 },
+  // DART C (2026-11-15, the owner's rule 6): 25% once at +$850, not +$1,850.
+  C: { threshold: 850, fraction: 0.25 },
 };
 
 // THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
@@ -208,7 +212,9 @@ export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
   D: 2000,
-  C: 2000, // 2026-11-10: C matches B everywhere except its absent profit-protection sale
+  // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
+  // the Protective Stop was removed from C on the same day.
+  C: 1000,
 };
 
 export function autoArmPolicy(system) {
@@ -248,16 +254,23 @@ const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
 // extended Vector sweep. C_LEGACY is the only C row in force; the "C" alias below
 // resolves to the same numbers. These are the identical numbers the Base44 copy
 // holds (shared/protectiveStop.ts).
-export const C_STOCK_ARM = 45;
-export const C_MARKET_ARM = 85;
+// DART C (2026-11-15, the owner's rule 9): THE PROTECTIVE STOP IS REMOVED FROM C, so
+// these thresholds are deliberately unreachable — a Vector score runs 0-100 and 101 can
+// never be met. Removing the arming this way leaves every code path A, B and D use
+// exactly as it was.
+export const C_STOCK_ARM = 101;
+export const C_MARKET_ARM = 101;
 
-export const C_LEGACY_STOCK_ARM = 45;
-export const C_LEGACY_MARKET_ARM = 85;
+export const C_LEGACY_STOCK_ARM = 101;
+export const C_LEGACY_MARKET_ARM = 101;
 
+// DART C's row now carries ONE job: the $250 the Automatic Hard Stop gives back from
+// its high-water P&L once it arms at +$1,000 (AUTO_ARM_PL_BY_SYSTEM.C). The arming
+// thresholds above can never be reached, so no Vector test can arm C.
 const C_LEGACY_RULE_SET = {
   stockThreshold: C_LEGACY_STOCK_ARM,
   marketThreshold: C_LEGACY_MARKET_ARM,
-  buffer: 350,
+  buffer: 250,
 };
 
 export const PROTECTIVE_BY_SYSTEM = {
@@ -285,12 +298,14 @@ export function protectivePolicy(system) {
 // ---------------------------------------------------------------------------
 export const PRICE_TRAIL_PCT = 0.0175;
 
+// DART C's ladder (2026-11-15, the owner's rule 7): from +$500 1.00%, from +$700
+// 0.75%, from +$900 0.50%, from +$1,100 0.25%. Nothing below +$500 — and C's trail now
+// ARMS at +$500 instead of at Press 2, so the first tier is the first trail.
 export const C_PROFIT_TRAIL_TIERS = [
-  { min_peak_pl: 3500, pct: 0.0035 },
-  { min_peak_pl: 2500, pct: 0.005 },
-  { min_peak_pl: 2000, pct: 0.0075 },
-  { min_peak_pl: 1500, pct: 0.01 },
-  { min_peak_pl: 900, pct: 0.0175 },
+  { min_peak_pl: 1100, pct: 0.0025 },
+  { min_peak_pl: 900, pct: 0.005 },
+  { min_peak_pl: 700, pct: 0.0075 },
+  { min_peak_pl: 500, pct: 0.01 },
 ];
 
 export function cProfitTrailPct(peakPl) {
@@ -310,8 +325,11 @@ export const VECTOR_THRESHOLD = 65;
 // DART C's Vector Exit (2026-11-11, now PERMANENT — the cutover to A's 65 was
 // cancelled on 2026-11-13): C closes at 45 on every C position, the extended Vector
 // sweep's choice. Every other account reads the shared VECTOR_THRESHOLD (65).
-export const C_VECTOR_EXIT = 45;
-export const C_LEGACY_VECTOR_EXIT = 45;
+// DART C (2026-11-15, the owner's answer 3): C HAS NO VECTOR EXIT OF ANY KIND. The
+// threshold is unreachable (Vector is scored 0-100), which removes both the downside
+// checkpoints and the +$900 upside grid for C without touching A, B or D's exit.
+export const C_VECTOR_EXIT = 101;
+export const C_LEGACY_VECTOR_EXIT = 101;
 
 // Exported so a read-only study can sweep a system's exit threshold without touching
 // the rule: the harness mutates this table in its own process, never in the worker.
