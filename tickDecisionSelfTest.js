@@ -209,6 +209,16 @@ const t10d = tick("C", pos({ peak_pl: 499 }), 102.49, { halted: false });
 const t10e = tick("C", pos({ peak_pl: 500 }), 102.5, { halted: false });
 check("C's trail arms exactly at +$500", [C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, t10d.prior_patches || [], (t10e.prior_patches || [])[0]], [500, 100, [], { price_trail_active: true, price_trail_activated_time: NOW }]);
 
+// DART D (2026-11-16, the owner's rule 8): the identical $100 giveback trail, resolved
+// from D's own row. A and B have no row and keep the share-price percentage trail.
+const dTrail = (over) => pos({ price_trail_active: true, peak_pl: 3000, pressed_1r: true, partial_profit_taken: true, ...(over || {}) });
+const t10f = tick("D", dTrail(), 114, { halted: false });
+check("D's trail exits on the same $100 giveback from its peak", [t10f.action, t10f.event, t10f.stop_detail.trail_protected], ["exit", "price_trail_stop", 2900]);
+const t10g = tick("D", pos({ peak_pl: 499 }), 102.49, { halted: false });
+const t10h = tick("D", pos({ peak_pl: 500 }), 102.5, { halted: false });
+check("D's trail arms exactly at +$500", [trailGivebackFor("D"), t10g.prior_patches || [], (t10h.prior_patches || [])[0]], [100, [], { price_trail_active: true, price_trail_activated_time: NOW }]);
+check("the giveback rows are C, C_LEGACY and D only; A and B keep the price trail", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY")], [null, null, 100, 100]);
+
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
 const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000 }), 102);
 check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 392, 792, 5.45]);
@@ -261,41 +271,46 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, B and D arm at +$2,000; C arms at +$1,000 (the owner's rule 8, 2026-11-15) with its own $250 giveback", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 1000, 2000]);
+check("A and B arm at +$2,000; C and D arm at +$1,000 (D adopted C's rule set 2026-11-16), $250 giveback", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [2000, 2000, 1000, 1000]);
 check("B sells 25% once at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
 check("A sells the same quarter (A is B plus the delay)", partialProfitPolicy("ANEW"), { threshold: 1850, fraction: 0.25 });
-check("D sells the same quarter (D is B plus one press)", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
+check("D sells a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });
 check("C sells a quarter at +$850 from 2026-11-15 (the owner's rule 6)", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
-check("D's single press is +$250, sized from buying power, trail at that press", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, true]);
-// The Protective Stop was REMOVED from C on 2026-11-15 (the owner's rule 9) and C has
-// no Vector Exit of any kind (answer 3): both thresholds are unreachable on both C rows,
-// so neither rule can act on a C position. B and D are never touched by it.
+check("D's single press is +$250, sized from buying power, and does NOT start the trail (rule 8 arms it at +$500)", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, false]);
+// The Protective Stop and the Vector Exit were REMOVED from C on 2026-11-15 and from D on
+// 2026-11-16 (the owner's rule sets): both thresholds are unreachable on every C and D row,
+// so neither rule can act on a C or a D position. A and B keep 55/65 and the 65 exit.
 check(
-  "C can never arm and can never Vector-exit (101/101 on both C rows), never touching B's 55/65",
-  [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
-  [101, 101, 101, 101, 55, 65]
+  "C and D can never arm (101/101), never touching A's or B's 55/65",
+  [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
+  [101, 101, 101, 101, 101, 101, 55, 65]
 );
-check("Vector Exit: C can never fire (101 on both C rows), every other account 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [101, 101, 65, 65, 65]);
+check("giveback after the automatic arm: C $250, D $250, B $350", [protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 250, 350]);
+check("Vector Exit: C and D can never fire (101), A and B stay 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("B"), vectorExitThreshold("ANEW")], [101, 101, 101, 65, 65]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
 // C closes its book at 13:30 ET and records close_1330 (2026-11-16, the owner's rule
-// 11). A, B and D still close at the shared 16:00 and still record close_1600.
+// 11); D adopted the same close the same day (rule 11). A and B still close at the
+// shared 16:00 and still record close_1600.
 const quiet = { partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true };
 const at = (iso, system) => decideTick({ system, position: pos(quiet), price: 100.5, nowIso: iso });
-check("session close per account: C at 13:30, every other account at 16:00",
+check("session close per account: C and D at 13:30, A and B at 16:00",
   [systemCloseMinute("C"), systemCloseMinute("C_LEGACY"), systemCloseMinute("B"), systemCloseMinute("D"), systemCloseMinute("ANEW"), closeReasonFor("C"), closeReasonFor("B"), closeReasonFor("ANEW"), closeReasonFor("D")],
-  [810, 810, 960, 960, 960, "close_1330", "close_1600", "close_1600", "close_1600"]);
+  [810, 810, 960, 810, 960, "close_1330", "close_1600", "close_1600", "close_1330"]);
 // 18:29Z = 13:29 ET, 18:31Z = 13:31 ET, 21:01Z = 16:01 ET on 2026-11-16 (EST).
 check("C is still open at 13:29 and closed at 13:31 with close_1330",
   [at("2026-11-16T18:29:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").exit_reason],
   ["hold", "exit", "close_1330"]);
-check("C's close is not close_1600 and B does not close at 13:31",
-  [at("2026-11-16T18:31:00.000Z", "C").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "B").action !== "exit"],
-  [false, true]);
-check("A, B and D still close at 16:00 and say close_1600",
-  [at("2026-11-16T21:01:00.000Z", "B").exit_reason, at("2026-11-16T21:01:00.000Z", "D").exit_reason, at("2026-11-16T21:01:00.000Z", "ANEW").exit_reason],
-  ["close_1600", "close_1600", "close_1600"]);
+check("C's and D's close is not close_1600 and B does not close at 13:31",
+  [at("2026-11-16T18:31:00.000Z", "C").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "D").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "B").action !== "exit"],
+  [false, false, true]);
+check("D is still open at 13:29 and closed at 13:31 with close_1330",
+  [at("2026-11-16T18:29:00.000Z", "D").action, at("2026-11-16T18:31:00.000Z", "D").action, at("2026-11-16T18:31:00.000Z", "D").exit_reason],
+  ["hold", "exit", "close_1330"]);
+check("A and B still close at 16:00 and say close_1600",
+  [at("2026-11-16T21:01:00.000Z", "B").exit_reason, at("2026-11-16T21:01:00.000Z", "ANEW").exit_reason],
+  ["close_1600", "close_1600"]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;
