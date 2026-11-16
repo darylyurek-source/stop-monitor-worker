@@ -5,6 +5,7 @@
 // reach its scheduled closing procedure" is checked rather than asserted.
 
 import { SESSION_CLOSE_MINUTE } from "./tickDecisionCore.js";
+import { systemCloseMinute } from "./tickRules.js";
 
 // The ET calendar day and minute-of-day, read from the clock instead of from a price.
 export function etNow(nowMs = Date.now()) {
@@ -31,9 +32,14 @@ export function etNow(nowMs = Date.now()) {
 // the next session and closed at that session's mark — it is never forced intraday. The sweep
 // adds no rule and no minute DART does not already have; it only makes sure the one that exists
 // does not depend on a trade arriving.
-export function isDueForClose({ position, nowMinutes }) {
+// DART C's book closes at its own minute (13:30 from 2026-11-16); every other account
+// at the shared 16:00. The minute comes from the same table decideTick reads.
+export function isDueForClose({ position, system, nowMinutes, closeMinute }) {
   if (!position || String(position.status) !== "open") return false;
-  return Number(nowMinutes) >= SESSION_CLOSE_MINUTE;
+  const minute = Number.isFinite(Number(closeMinute))
+    ? Number(closeMinute)
+    : systemCloseMinute(system, SESSION_CLOSE_MINUTE);
+  return Number(nowMinutes) >= minute;
 }
 
 // The price to close at: the last price this process accepted for the symbol, else the

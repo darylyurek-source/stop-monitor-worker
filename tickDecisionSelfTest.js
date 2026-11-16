@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor, systemCloseMinute, closeReasonFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -49,11 +49,11 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: A -$1,200, B -$1,200, C -$300 (2026-11-15, the owner's rule 9), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -300, -1200]);
+check("hard stop per system: A -$1,200, B -$1,200, C -$400 (2026-11-16, the owner's rule 9 as amended), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -400, -1200]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
-// with none — resolves to C_LEGACY, whose hard stop is -$300 from 2026-11-15 (the
-// owner's rule 9); the "C" alias carries the same number.
-check("every C position resolves to C_LEGACY at -$300", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -300, -300]);
+// with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
+// owner's rule 9 as amended); the "C" alias carries the same number.
+check("every C position resolves to C_LEGACY at -$400", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -400, -400]);
 check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("ANEW", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("D", {})], ["B", "ANEW", "D"]);
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
@@ -88,13 +88,14 @@ check("A holds just above -$1,200", [tick("ANEW", deep(), 94.5).action], ["hold"
 check("A no longer closes at -$200", [tick("ANEW", deep(), 99).action, tick("ANEW", deep(), 99.5).action], ["hold", "hold"]);
 check("B closes at -$1,200", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
 check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
-check("C closes at -$300 (the owner's rule 9, 2026-11-15)", [tick("C", deep(), 98.5).event, tick("C", deep(), 98.5).gross_pl], ["realtime_stop_close", -300]);
-check("C holds just above -$300", [tick("C", deep(), 98.55).action], ["hold"]);
+check("C closes at -$400 (the owner's rule 9 as amended, 2026-11-16)", [tick("C", deep(), 98).event, tick("C", deep(), 98).gross_pl], ["realtime_stop_close", -400]);
+check("C holds just above -$400", [tick("C", deep(), 98.05).action], ["hold"]);
+check("C holds at the old -$300 that used to close it", [tick("C", deep(), 98.5).action], ["hold"]);
 check("C no longer closes at -$1,200", [tick("C", deep(), 94).action], ["hold"]);
 // A C position opened on ANY later date runs the same -$1,200 — there is no cutover.
 const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
-check("a later C position closes at the same -$300", [tick("C", cNew(), 98.5).event, tick("C", cNew(), 98.5).gross_pl], ["realtime_stop_close", -300]);
-check("a later C position holds just above -$300 and closes at -$300", [tick("C", cNew(), 98.55).action, tick("C", cNew(), 98.5).action], ["hold", "exit"]);
+check("a later C position closes at the same -$400", [tick("C", cNew(), 98).event, tick("C", cNew(), 98).gross_pl], ["realtime_stop_close", -400]);
+check("a later C position holds just above -$400 and closes at -$400", [tick("C", cNew(), 98.05).action, tick("C", cNew(), 98).action], ["hold", "exit"]);
 check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
 check("no account borrows another's stop: only each one's own -$1,200 closes it", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
@@ -188,18 +189,25 @@ check("protective giveback exits", [t8.action, t8.event, t8.gross_pl, t8.commiss
 const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
 check("high-water ratchets up", [t9.action, t9.prior_patches[0]], ["grid", { protective_high_water_pl: 1200 }]);
 
-// --- 10. PRICE TRAIL (C ladder) ---------------------------------------------
-// The tier is chosen from PEAK profit, not current P&L. Stored peak $3,000 with
-// current P&L $2,000 -> the $2,500 tier (0.50%): extreme $120.00 protects $119.40,
-// so a price of $110.00 breaches.
-const t10 = tick("C", pos({ price_trail_active: true, price_trail_extreme: 120, peak_pl: 3000, pressed_1r: true, pressed_2r: true }), 110, { halted: false });
-check("price trail exits on the peak's tier", [t10.action, t10.event, t10.stop_detail.trail_pct, t10.stop_detail.trail_protected], ["exit", "price_trail_stop", 0.005, 119.4]);
-check("price trail costs", [t10.gross_pl, t10.commission_fees], [2000, 3.58]);
-
-// Same stored peak, but a price that lifts current P&L above it: the peak becomes
-// $3,880 and the tighter 0.35% tier applies (protected $119.58), never the looser one.
-const t10b = tick("C", pos({ price_trail_active: true, price_trail_extreme: 120, peak_pl: 3000, pressed_1r: true, pressed_2r: true }), 119.4, { halted: false });
-check("current P&L above the peak tightens the tier", [t10b.action, t10b.event, t10b.stop_detail.trail_pct, t10b.stop_detail.trail_protected], ["exit", "price_trail_stop", 0.0035, 119.58]);
+// --- 10. PRICE TRAIL (C: $100 DOLLAR GIVEBACK) -------------------------------
+// C's trail arms at +$500 of peak P&L and then closes on the first print whose P&L is
+// at or below the highest P&L reached since arming minus $100. It measures P&L, never
+// share price, so no percentage and no price extreme is involved.
+const cTrail = (over) => pos({ price_trail_active: true, peak_pl: 3000, pressed_1r: true, pressed_2r: true, pressed_3r: true, partial_profit_taken: true, ...(over || {}) });
+// Stored peak $3,000 -> floor $2,900. A price of $114.00 gives P&L $2,800: breach.
+const t10 = tick("C", cTrail(), 114, { halted: false });
+check("C's trail exits on the $100 giveback from its peak", [t10.action, t10.event, t10.stop_detail.trail_pct, t10.stop_detail.trail_protected], ["exit", "price_trail_stop", null, 2900]);
+check("C's giveback exit costs", [t10.gross_pl, t10.commission_fees], [2800, 3.58]);
+// Same peak, P&L $2,960 — inside the giveback, so the position is held.
+const t10b = tick("C", cTrail(), 114.8, { halted: false });
+check("C holds inside the $100 giveback", [t10b.action !== "exit", t10b.exit_price ?? null], [true, null]);
+// A new high lifts the reference: peak $3,200 -> floor $3,100, so $3,150 is held.
+const t10c = tick("C", cTrail({ peak_pl: 3150 }), 115.75, { halted: false });
+check("a higher peak lifts the giveback floor", [t10c.action !== "exit", t10c.exit_price ?? null], [true, null]);
+// Arming: the trail starts at +$500 of peak P&L and writes no price extreme for C.
+const t10d = tick("C", pos({ peak_pl: 499 }), 102.49, { halted: false });
+const t10e = tick("C", pos({ peak_pl: 500 }), 102.5, { halted: false });
+check("C's trail arms exactly at +$500", [C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, t10d.prior_patches || [], (t10e.prior_patches || [])[0]], [500, 100, [], { price_trail_active: true, price_trail_activated_time: NOW }]);
 
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
 const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000 }), 102);
@@ -269,6 +277,25 @@ check(
   [101, 101, 101, 101, 55, 65]
 );
 check("Vector Exit: C can never fire (101 on both C rows), every other account 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("B"), vectorExitThreshold("D"), vectorExitThreshold("ANEW")], [101, 101, 65, 65, 65]);
+
+// --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
+// C closes its book at 13:30 ET and records close_1330 (2026-11-16, the owner's rule
+// 11). A, B and D still close at the shared 16:00 and still record close_1600.
+const quiet = { partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true };
+const at = (iso, system) => decideTick({ system, position: pos(quiet), price: 100.5, nowIso: iso });
+check("session close per account: C at 13:30, every other account at 16:00",
+  [systemCloseMinute("C"), systemCloseMinute("C_LEGACY"), systemCloseMinute("B"), systemCloseMinute("D"), systemCloseMinute("ANEW"), closeReasonFor("C"), closeReasonFor("B"), closeReasonFor("ANEW"), closeReasonFor("D")],
+  [810, 810, 960, 960, 960, "close_1330", "close_1600", "close_1600", "close_1600"]);
+// 18:29Z = 13:29 ET, 18:31Z = 13:31 ET, 21:01Z = 16:01 ET on 2026-11-16 (EST).
+check("C is still open at 13:29 and closed at 13:31 with close_1330",
+  [at("2026-11-16T18:29:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").exit_reason],
+  ["hold", "exit", "close_1330"]);
+check("C's close is not close_1600 and B does not close at 13:31",
+  [at("2026-11-16T18:31:00.000Z", "C").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "B").action !== "exit"],
+  [false, true]);
+check("A, B and D still close at 16:00 and say close_1600",
+  [at("2026-11-16T21:01:00.000Z", "B").exit_reason, at("2026-11-16T21:01:00.000Z", "D").exit_reason, at("2026-11-16T21:01:00.000Z", "ANEW").exit_reason],
+  ["close_1600", "close_1600", "close_1600"]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;

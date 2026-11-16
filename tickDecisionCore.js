@@ -45,6 +45,7 @@ import {
   PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
   protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
   vectorExitThreshold, ruleKeyFor,
+  C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor,
 } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
@@ -319,31 +320,40 @@ export function decideTick(args) {
   const protectiveBreach = oldHigh != null && pl <= oldHigh - protectiveBuffer;
 
   const peakForTrail = Math.max(Number(pos.peak_pl) || 0, pl);
-  const tierPct = cProfitTrailPct(peakForTrail);
-  let pt = assessPriceTrail(pos, price, tierPct);
+  const isC = ruleKey === "C_LEGACY";
+  // DART C's trail is a $100 DOLLAR GIVEBACK (2026-11-16, the owner's rule 7): it arms
+  // at +$500 of peak P&L and closes on the print whose P&L is at or below the highest
+  // P&L reached since arming minus $100. It measures P&L, not share price, so no price
+  // extreme is written for C and the percentage ladder below is never reached by a C
+  // position (it stays for the read-only studies).
+  const tierPct = isC ? null : cProfitTrailPct(peakForTrail);
+  let pt = isC
+    ? { active: !!pos.price_trail_active, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
+    : assessPriceTrail(pos, price, tierPct);
+  if (isC && pt.active) {
+    const floor = r2(peakForTrail - C_TRAIL_GIVEBACK_USD);
+    pt = { ...pt, breach: pl <= floor, protectedLevel: floor };
+  }
 
   const priorPatches = [];
 
   // Press 2 activates the trail for A, B and D. DART C's trail ARMS AT +$500 of peak
-  // P&L instead, with or without a press, and it has none below +$500 (2026-11-15, the
-  // owner's rule 7). The write happens on this tick, before any stop is evaluated, and
-  // can never itself breach.
-  const trailArmsNow = ruleKey === "C_LEGACY"
-    ? (!pt.active && peakForTrail >= 500)
+  // P&L instead, with or without a press (2026-11-15, the owner's rule 7). The write
+  // happens on this tick, before any stop is evaluated, and can never itself breach.
+  const trailArmsNow = isC
+    ? (!pt.active && peakForTrail >= C_TRAIL_ARM_PL)
     : (!pt.active && pos.pressed_2r);
   if (trailArmsNow) {
-    priorPatches.push({
-      price_trail_active: true,
-      price_trail_extreme: r2(price),
-      price_trail_activated_time: nowIso,
-    });
+    priorPatches.push(isC
+      ? { price_trail_active: true, price_trail_activated_time: nowIso }
+      : { price_trail_active: true, price_trail_extreme: r2(price), price_trail_activated_time: nowIso });
     pt = {
       active: true,
       breach: false,
       oldExtreme: price,
       newExtreme: price,
       protectedLevel: null,
-      pct: tierPct == null ? PRICE_TRAIL_PCT : tierPct,
+      pct: isC ? null : (tierPct == null ? PRICE_TRAIL_PCT : tierPct),
     };
   }
   // DART C'S AUTOMATIC HARD STOP (2026-11-15, the owner's rule 8): C arms at +$1,000 —
@@ -407,12 +417,14 @@ export function decideTick(args) {
     };
   }
 
-  // Rule 2b — the 16:00 ET session end. Checked after the stops so a genuine stop
-  // at the bell keeps its own reason, exactly as the live manager's close does.
-  if (etMinuteOfDay(nowIso) >= SESSION_CLOSE_MINUTE) {
+  // Rule 2b — the session end, on the account's own clock. DART C closes at 13:30 and
+  // its record says close_1330 (2026-11-16, the owner's rule 11); A, B and D close at
+  // the shared 16:00 and still record close_1600. Checked after the stops so a genuine
+  // stop at the bell keeps its own reason, exactly as the live manager's close does.
+  if (etMinuteOfDay(nowIso) >= systemCloseMinute(ruleKey, SESSION_CLOSE_MINUTE)) {
     return {
       ...base,
-      ...buildExit({ pos, side, price, shares, tcb, reason: "close_1600", nowIso, nowMs, pl, priorPatches }),
+      ...buildExit({ pos, side, price, shares, tcb, reason: closeReasonFor(ruleKey, SESSION_CLOSE_MINUTE), nowIso, nowMs, pl, priorPatches }),
       pl_raw: pl,
       session_close: true,
     };
@@ -423,8 +435,8 @@ export function decideTick(args) {
     priorPatches.push({ protective_high_water_pl: r2(pl) });
   }
 
-  // Rule 4 — price-trail extreme ratchet.
-  if (pt.active && pt.newExtreme !== pt.oldExtreme) {
+  // Rule 4 — price-trail extreme ratchet (share-price trail only: C measures P&L).
+  if (!isC && pt.active && pt.newExtreme !== pt.oldExtreme) {
     priorPatches.push({ price_trail_extreme: r2(pt.newExtreme) });
   }
 

@@ -166,10 +166,11 @@ export function ruleKeyFor(system, position) {
 // the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-// DART C (2026-11-15, the owner's rule 9): C's Hard Loss Stop is -$300, decided on the
-// two-print rule the price gate already enforces. C_LEGACY carries the same number — it
-// is the only C row a position can resolve to. A, B and D are NOT changed.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -300, C_LEGACY: -300, D: -1200 };
+// DART C (2026-11-16, the owner's rule 9 as amended): C's Hard Loss Stop is -$400,
+// decided on the two-print rule the price gate already enforces. C_LEGACY carries the
+// same number — it is the only C row a position can resolve to. A, B and D are NOT
+// changed.
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -1200 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -313,6 +314,35 @@ export function cProfitTrailPct(peakPl) {
   if (!Number.isFinite(peak)) return null;
   for (const t of C_PROFIT_TRAIL_TIERS) if (peak >= t.min_peak_pl) return t.pct;
   return null;
+}
+
+// DART C (2026-11-16, the owner's rule 7 as amended): C's trail is a FIXED $100 DOLLAR
+// GIVEBACK, not a percentage of price. It still ARMS at +$500 of peak P&L; once armed,
+// C closes on the first valid print whose P&L is at or below the highest P&L reached
+// since arming minus $100. The ladder above survives only for the read-only studies
+// that replay old trades: no live C tick calls it.
+export const C_TRAIL_ARM_PL = 500;
+export const C_TRAIL_GIVEBACK_USD = 100;
+
+// ---------------------------------------------------------------------------
+// The session end, per account. C closes its book at 13:30 ET (2026-11-16, the
+// owner's rule 11: nothing new after 13:30 and everything still open closes then);
+// A, B and D close at the shared 16:00. decideTick and the close sweep both read
+// this one table, so a tick and the clock can never part company on it.
+// ---------------------------------------------------------------------------
+export const SYSTEM_CLOSE_MINUTE = { C: 13 * 60 + 30, C_LEGACY: 13 * 60 + 30 };
+
+export function systemCloseMinute(system, shared = 16 * 60) {
+  const v = SYSTEM_CLOSE_MINUTE[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : shared;
+}
+
+// The exit reason a scheduled close records: C's 13:30 close is close_1330, so the
+// record and the Exit Scorecard say 1:30 and never 4:00.
+export function closeReasonFor(system, shared = 16 * 60) {
+  const m = systemCloseMinute(system, shared);
+  if (m === shared) return "close_1600";
+  return `close_${String(Math.floor(m / 60)).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
 }
 
 // ---------------------------------------------------------------------------
