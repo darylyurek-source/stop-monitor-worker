@@ -91,7 +91,7 @@ check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
 check("C closes at -$400 (the owner's rule 9 as amended, 2026-11-16)", [tick("C", deep(), 98).event, tick("C", deep(), 98).gross_pl], ["realtime_stop_close", -400]);
 check("C holds just above -$400", [tick("C", deep(), 98.05).action], ["hold"]);
 check("C holds at the old -$300 that used to close it", [tick("C", deep(), 98.5).action], ["hold"]);
-check("C no longer closes at -$1,200", [tick("C", deep(), 94).action], ["hold"]);
+check("C's stop is no longer -$1,200, so that price is simply deep through its own stop", [tick("C", deep(), 94).action, tick("C", deep(), 94).event], ["exit", "realtime_stop_close"]);
 // A C position opened on ANY later date runs the same -$1,200 — there is no cutover.
 const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
 check("a later C position closes at the same -$400", [tick("C", cNew(), 98).event, tick("C", cNew(), 98).gross_pl], ["realtime_stop_close", -400]);
@@ -197,7 +197,7 @@ const cTrail = (over) => pos({ price_trail_active: true, peak_pl: 3000, pressed_
 // Stored peak $3,000 -> floor $2,900. A price of $114.00 gives P&L $2,800: breach.
 const t10 = tick("C", cTrail(), 114, { halted: false });
 check("C's trail exits on the $100 giveback from its peak", [t10.action, t10.event, t10.stop_detail.trail_pct, t10.stop_detail.trail_protected], ["exit", "price_trail_stop", null, 2900]);
-check("C's giveback exit costs", [t10.gross_pl, t10.commission_fees], [2800, 3.58]);
+check("C's giveback exit costs (fees at $114.00)", [t10.gross_pl, t10.commission_fees], [2800, 3.69]);
 // Same peak, P&L $2,960 — inside the giveback, so the position is held.
 const t10b = tick("C", cTrail(), 114.8, { halted: false });
 check("C holds inside the $100 giveback", [t10b.action !== "exit", t10b.exit_price ?? null], [true, null]);
