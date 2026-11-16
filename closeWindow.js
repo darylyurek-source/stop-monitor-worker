@@ -34,11 +34,11 @@ export function etNow(nowMs = Date.now()) {
 // does not depend on a trade arriving.
 // DART C's book closes at its own minute (13:30 from 2026-11-16); every other account
 // at the shared 16:00. The minute comes from the same table decideTick reads.
-export function isDueForClose({ position, system, nowMinutes, closeMinute }) {
+export function isDueForClose({ position, system, nowMinutes, closeMinute, nowMs = null }) {
   if (!position || String(position.status) !== "open") return false;
   const minute = Number.isFinite(Number(closeMinute))
     ? Number(closeMinute)
-    : systemCloseMinute(system, SESSION_CLOSE_MINUTE);
+    : systemCloseMinute(system, SESSION_CLOSE_MINUTE, nowMs);
   return Number(nowMinutes) >= minute;
 }
 

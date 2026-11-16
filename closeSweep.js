@@ -66,7 +66,7 @@ export async function runSessionClose({
   for (const system of systems) {
     for (const id of ids(system)) {
       const pos = get(system, id);
-      if (!isDueForClose({ position: pos, system, nowMinutes: minutes })) continue;
+      if (!isDueForClose({ position: pos, system, nowMinutes: minutes, nowMs })) continue;
       due += 1;
 
       // Resolve the price AT THE CLOSE. A resolver that throws must not strand the position:

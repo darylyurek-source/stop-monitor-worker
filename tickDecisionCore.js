@@ -418,10 +418,10 @@ export function decideTick(args) {
   // its record says close_1330 (2026-11-16, the owner's rule 11); A, B and D close at
   // the shared 16:00 and still record close_1600. Checked after the stops so a genuine
   // stop at the bell keeps its own reason, exactly as the live manager's close does.
-  if (etMinuteOfDay(nowIso) >= systemCloseMinute(ruleKey, SESSION_CLOSE_MINUTE)) {
+  if (etMinuteOfDay(nowIso) >= systemCloseMinute(ruleKey, SESSION_CLOSE_MINUTE, nowMs)) {
     return {
       ...base,
-      ...buildExit({ pos, side, price, shares, tcb, reason: closeReasonFor(ruleKey, SESSION_CLOSE_MINUTE), nowIso, nowMs, pl, priorPatches }),
+      ...buildExit({ pos, side, price, shares, tcb, reason: closeReasonFor(ruleKey, SESSION_CLOSE_MINUTE, nowMs), nowIso, nowMs, pl, priorPatches }),
       pl_raw: pl,
       session_close: true,
     };

@@ -348,15 +348,37 @@ export function trailGivebackFor(system) {
 // ---------------------------------------------------------------------------
 export const SYSTEM_CLOSE_MINUTE = { C: 13 * 60 + 30, C_LEGACY: 13 * 60 + 30, D: 13 * 60 + 30 };
 
-export function systemCloseMinute(system, shared = 16 * 60) {
-  const v = SYSTEM_CLOSE_MINUTE[String(system ?? "").trim().toUpperCase()];
-  return Number.isFinite(Number(v)) ? Number(v) : shared;
+// TODAY ONLY — 2026-11-16 (owner authorized for this session alone). DART C and DART D
+// do NOT close at 13:30 on this date: every open C and D position runs under its normal
+// rules until it exits on its own, or at the shared 16:00 close. Entries are untouched —
+// Base44's own 13:30 entry cutoff is a separate rule in a separate process and is not read
+// here. THE EXCEPTION IS A DATE LITERAL, so it reverts by itself: on 2026-11-17 the date is
+// no longer in these lists, this table is read exactly as it was before, and nothing has to
+// be reverted, switched off or remembered.
+export const FULL_SESSION_CLOSE_DATES = { C: ["2026-11-16"], C_LEGACY: ["2026-11-16"], D: ["2026-11-16"] };
+
+// The ET calendar date of an instant, so the exception is keyed on the exchange's own day
+// and never on the server's timezone.
+function etDateOf(ms) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(ms));
+  const get = (t) => (parts.find((p) => p.type === t) || {}).value;
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+export function systemCloseMinute(system, shared = 16 * 60, nowMs = null) {
+  const key = String(system ?? "").trim().toUpperCase();
+  const v = SYSTEM_CLOSE_MINUTE[key];
+  if (!Number.isFinite(Number(v))) return shared;
+  if (nowMs != null && (FULL_SESSION_CLOSE_DATES[key] || []).includes(etDateOf(nowMs))) return shared;
+  return Number(v);
 }
 
 // The exit reason a scheduled close records: C's 13:30 close is close_1330, so the
 // record and the Exit Scorecard say 1:30 and never 4:00.
-export function closeReasonFor(system, shared = 16 * 60) {
-  const m = systemCloseMinute(system, shared);
+export function closeReasonFor(system, shared = 16 * 60, nowMs = null) {
+  const m = systemCloseMinute(system, shared, nowMs);
   if (m === shared) return "close_1600";
   return `close_${String(Math.floor(m / 60)).padStart(2, "0")}${String(m % 60).padStart(2, "0")}`;
 }
