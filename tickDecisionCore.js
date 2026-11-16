@@ -39,14 +39,7 @@
 //
 // Paper only. USD. No trading state is held between calls.
 
-import {
-  r2, orderCost, slippageCost, unrealized,
-  PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS,
-  PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan,
-  protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD,
-  vectorExitThreshold, ruleKeyFor,
-  C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor,
-} from "./tickRules.js";
+import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
 // --- the 16:00 ET session end ------------------------------------------------
@@ -320,7 +313,11 @@ export function decideTick(args) {
   const protectiveBreach = oldHigh != null && pl <= oldHigh - protectiveBuffer;
 
   const peakForTrail = Math.max(Number(pos.peak_pl) || 0, pl);
-  const isC = ruleKey === "C_LEGACY";
+  // Driven by the system's ROW, not by C's name (2026-11-16): D carries the identical
+  // $100 giveback trail, so both resolve here. A and B have no row and keep the
+  // share-price percentage trail, unchanged.
+  const trailGiveback = trailGivebackFor(ruleKey);
+  const isC = trailGiveback != null;
   // DART C's trail is a $100 DOLLAR GIVEBACK (2026-11-16, the owner's rule 7): it arms
   // at +$500 of peak P&L and closes on the print whose P&L is at or below the highest
   // P&L reached since arming minus $100. It measures P&L, not share price, so no price
@@ -331,7 +328,7 @@ export function decideTick(args) {
     ? { active: !!pos.price_trail_active, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
     : assessPriceTrail(pos, price, tierPct);
   if (isC && pt.active) {
-    const floor = r2(peakForTrail - C_TRAIL_GIVEBACK_USD);
+    const floor = r2(peakForTrail - trailGiveback);
     pt = { ...pt, breach: pl <= floor, protectedLevel: floor };
   }
 
