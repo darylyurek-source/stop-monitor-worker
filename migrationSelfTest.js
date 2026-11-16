@@ -163,12 +163,12 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Profit Protection: B, A (ANEW) and D sell 25% once at +$1,850. C sells its quarter at
-  // +$850 from 2026-11-15 (the owner's rule 6). E was removed from the engine on
-  // 2026-11-10 and has no row anywhere.
+  // Profit Protection: B and A (ANEW) sell 25% once at +$1,850. C sells its quarter at
+  // +$850 from 2026-11-15 (the owner's rule 6), and D adopted the same +$850 row on
+  // 2026-11-16 (rule 7). E was removed from the engine on 2026-11-10.
   check("partial: C takes a quarter at +$850", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
   check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
-  check("partial: D takes the same quarter at +$1,850", partialProfitPolicy("D"), { threshold: 1850, fraction: 0.25 });
+  check("partial: D takes a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });
   check("partial: E has no row", partialProfitPolicy("E"), null);
   const part = decideTick({ system: "B", position: pos({}), price: 50 + 1900 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: a quarter of the shares is sold", [part.action, part.sold_shares], ["partial", 100]);
@@ -176,16 +176,16 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const twice = decideTick({ system: "B", position: pos({ partial_profit_taken: true, shares: 300, tcb: 15000 }), price: 50 + 1900 / 300, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: never fires twice", twice.action !== "partial", true);
 
-  // DART D (2026-11-10, before the fresh test): ONE press at B's own Press 1 level,
-  // +$250, sized by its caller against the day's buying power, and the price trail
-  // starts at that press. No Press 2 and no Press 3 exist on D.
+  // DART D (2026-11-16, the owner's rule 6): ONE press at +$250, sized by its caller
+  // against the day's buying power. No Press 2 and no Press 3 exist on D, and the press
+  // no longer starts a trail — rule 8 arms D's $100 giveback trail at +$500 of P&L.
   const dPress = decideTick({
     system: "D", halted: false, position: pos({}), price: 50 + 250 / 400,
     pressSizeUsd: 20250, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
   });
   check("press: D presses once at +$250", dPress.action, "press");
   check("press: D's one press adds the sized amount", [dPress.shares_added, dPress.shares_after], [400, 800]);
-  check("press: D's trail starts at that press", dPress.patch.price_trail_active, true);
+  check("press: D's press does not start the trail (rule 8 arms it at +$500)", dPress.patch.price_trail_active ?? false, false);
   check("press: D never takes a Press 2", dPress.patch.pressed_2r, false);
   const dSecond = decideTick({
     system: "D", halted: false,
