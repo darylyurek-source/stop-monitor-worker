@@ -49,7 +49,7 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
-check("hard stop per system: A -$1,200, B -$1,200, C -$400 (2026-11-16, the owner's rule 9 as amended), D -$1,200", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -400, -1200]);
+check("hard stop per system: A -$1,200, B -$1,200, C -$400, D -$400 (D adopted C's rule set 2026-11-16)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-1200, -1200, -400, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
 // with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
 // owner's rule 9 as amended); the "C" alias carries the same number.
@@ -58,11 +58,11 @@ check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entr
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A and B arm at 55/65, C can never arm (101/101, Protective Stop removed 2026-11-15) and gives back $250, D at 55/65 with a $700 giveback", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [55, 65, 101, 101, 250, 101, 101, 700]);
-check("D runs B's 55/65 rule set and D's press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [55, 65, 250, true]);
+check("protective policy: A and B arm at 55/65; C and D can never arm (101/101, stop removed) and give back $250", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [55, 65, 101, 101, 250, 101, 101, 250]);
+check("D runs C's rule set (no Protective Stop) and D's own press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 250, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
-check("Profit Protection: A(ANEW), B and D sell 25% at +$1,850, C sells 25% at +$850 (2026-11-15); E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, null, null]);
+check("Profit Protection: A(ANEW) and B sell 25% at +$1,850; C and D sell 25% at +$850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 1850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
 
 // Every loss level is pre-checked on the positions below, so no Vector checkpoint can
 // act and the hard stop is the only rule that can speak on these prices.
@@ -96,8 +96,8 @@ check("C's stop is no longer -$1,200, so that price is simply deep through its o
 const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
 check("a later C position closes at the same -$400", [tick("C", cNew(), 98).event, tick("C", cNew(), 98).gross_pl], ["realtime_stop_close", -400]);
 check("a later C position holds just above -$400 and closes at -$400", [tick("C", cNew(), 98.05).action, tick("C", cNew(), 98).action], ["hold", "exit"]);
-check("D closes at -$1,200 and holds just above it", [tick("D", deep(), 94).event, tick("D", deep(), 94.5).action], ["realtime_stop_close", "hold"]);
-check("no account borrows another's stop: only each one's own -$1,200 closes it", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
+check("D closes at -$400 and holds just above it", [tick("D", deep(), 98).event, tick("D", deep(), 98.05).action], ["realtime_stop_close", "hold"]);
+check("no account borrows another's stop: each holds above its own level", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
 // --- 1b. HARD LOSS STOP ON A SECOND VALID PRINT (2026-11-13 10:58 ET) ----------
 // The live engine passes hardStopConfirm, so one print through the level arms the stop and the
@@ -131,7 +131,7 @@ check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after
 const t3 = tick("D", pos(), 101.25, { halted: false, pressSizeUsd: 10100 });
 check("D presses once at +$250", [t3.action, t3.event, t3.pl_raw, t3.press_size_usd, t3.press_level], ["press", "press1", 250, 10100, "1R"]);
 check("D press arithmetic", [t3.shares_added, t3.shares_after, t3.patch.tcb, t3.commission_fees], [99, 299, 30023.75, 1.37]);
-check("D's trail starts at its one press", [t3.patch.price_trail_active, t3.patch.price_trail_extreme, t3.patch.pressed_2r, t3.patch.pressed_3r], [true, 101.25, false, false]);
+check("D's press does not start the trail (rule 8 arms it at +$500)", [t3.patch.price_trail_active ?? null, t3.patch.price_trail_extreme ?? null, t3.patch.pressed_2r, t3.patch.pressed_3r], [null, null, false, false]);
 // No second rung exists: above +$700 and +$800 a pressed D still only holds.
 const t3b = tick("D", pos({ pressed_1r: true, shares: 299, tcb: 30023.75, price_trail_active: true, price_trail_extreme: 101.25 }), 103, { halted: false, pressSizeUsd: 10100 });
 check("D never presses twice", [t3b.action, t3b.event], ["hold", "hold"]);
