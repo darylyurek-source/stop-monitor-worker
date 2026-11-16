@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor, systemCloseMinute, closeReasonFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor, systemCloseMinute, closeReasonFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, trailGivebackFor } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
