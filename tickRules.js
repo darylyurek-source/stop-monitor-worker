@@ -91,7 +91,7 @@ export function press1Threshold(system) {
 // trailing stop starts at that press instead of at a Press 2 that no longer exists.
 // ---------------------------------------------------------------------------
 export const PRESS_PLAN = {
-  D: { single: true, dynamicSize: true, trailAtFirstPress: true },
+  D: { single: true, dynamicSize: true, trailAtFirstPress: false },
 };
 
 export function pressPlan(system) {
@@ -170,7 +170,7 @@ export function ruleKeyFor(system, position) {
 // decided on the two-print rule the price gate already enforces. C_LEGACY carries the
 // same number — it is the only C row a position can resolve to. A, B and D are NOT
 // changed.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -1200 };
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -191,7 +191,7 @@ export function systemStop(system) {
 export const SYSTEM_PARTIAL_PROFIT = {
   B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
-  D: { threshold: 1850, fraction: 0.25 }, // DART D — B plus one single, buying-power-sized Press
+  D: { threshold: 850, fraction: 0.25 }, // DART D (2026-11-16): C's rule set — 25% once at +$850
   // DART C (set 2026-11-11, after that day's close): C runs B's rules EXACTLY from
   // the next session, so it carries B's Profit Protection — 25% once at +$1,850.
   // The row removed on 2026-11-06 is restored; its one remaining difference from B
@@ -212,7 +212,7 @@ export const SYSTEM_PARTIAL_PROFIT = {
 export const AUTO_ARM_PL_BY_SYSTEM = {
   B: 2000,
   ANEW: 2000,
-  D: 2000,
+  D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
   // the Protective Stop was removed from C on the same day.
   C: 1000,
@@ -247,7 +247,10 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 // DART D's own row (2026-11-11): B's 55/65 arming with D's stops at double size —
 // a $700 giveback (was $350). Nothing else about D changed; it is still B's rule
 // set plus its single buying-power-sized Press.
-const D_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 700 };
+// DART D (2026-11-16): the Protective Stop is REMOVED from D, exactly as from C — the
+// arming thresholds are 101/101, which no Vector score can reach. The row's only
+// remaining job is the $250 the Automatic Hard Stop gives back once it arms at +$1,000.
+const D_RULE_SET = { stockThreshold: 101, marketThreshold: 101, buffer: 250 };
 
 // DART C's Vector test (2026-11-11, after that day's close — and now PERMANENT,
 // because the cutover that would have moved C to A's 55/65 was cancelled on
@@ -324,13 +327,26 @@ export function cProfitTrailPct(peakPl) {
 export const C_TRAIL_ARM_PL = 500;
 export const C_TRAIL_GIVEBACK_USD = 100;
 
+// DART D (2026-11-16, the owner's rule 8): D carries the SAME P&L giveback trail as C —
+// it arms when P&L first reaches +$500 (C_TRAIL_ARM_PL above) and closes on the first
+// admissible print whose P&L is at or below the highest reached since arming minus $100.
+// One table, so neither account can drift from the other; A and B have no row and keep
+// the share-price percentage trail, unchanged.
+export const TRAIL_GIVEBACK_BY_SYSTEM = { C: 100, C_LEGACY: 100, D: 100 };
+
+// The giveback (USD) a system's trail enforces, or null when it has the price trail.
+export function trailGivebackFor(system) {
+  const v = TRAIL_GIVEBACK_BY_SYSTEM[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : null;
+}
+
 // ---------------------------------------------------------------------------
 // The session end, per account. C closes its book at 13:30 ET (2026-11-16, the
 // owner's rule 11: nothing new after 13:30 and everything still open closes then);
 // A, B and D close at the shared 16:00. decideTick and the close sweep both read
 // this one table, so a tick and the clock can never part company on it.
 // ---------------------------------------------------------------------------
-export const SYSTEM_CLOSE_MINUTE = { C: 13 * 60 + 30, C_LEGACY: 13 * 60 + 30 };
+export const SYSTEM_CLOSE_MINUTE = { C: 13 * 60 + 30, C_LEGACY: 13 * 60 + 30, D: 13 * 60 + 30 };
 
 export function systemCloseMinute(system, shared = 16 * 60) {
   const v = SYSTEM_CLOSE_MINUTE[String(system ?? "").trim().toUpperCase()];
@@ -363,7 +379,9 @@ export const C_LEGACY_VECTOR_EXIT = 101;
 
 // Exported so a read-only study can sweep a system's exit threshold without touching
 // the rule: the harness mutates this table in its own process, never in the worker.
-export const VECTOR_EXIT_BY_SYSTEM = { C: C_VECTOR_EXIT, C_LEGACY: C_LEGACY_VECTOR_EXIT };
+// DART D (2026-11-16): D HAS NO VECTOR EXIT — 101 is unreachable, which removes both the
+// loss checkpoints and the +$900 upside grid for D without touching A's, B's or C's exit.
+export const VECTOR_EXIT_BY_SYSTEM = { C: C_VECTOR_EXIT, C_LEGACY: C_LEGACY_VECTOR_EXIT, D: 101 };
 
 // The Vector Exit threshold a system closes at: its own row, else the shared 65.
 export function vectorExitThreshold(system) {
