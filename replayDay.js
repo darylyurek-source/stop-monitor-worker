@@ -343,7 +343,7 @@ export function replayAccount(account, barsBySymbol, openMs, closeMs) {
   }
 
   // The 16:00 ET session end: a position with no print after 15:59 still has to close,
-  // and decideTick's own close_1600 rule does it on the last price the tape carried.
+  // and decideTick's own session-close rule does it on the last price the tape carried.
   const closeAt = etMs(account.date, 16, 0);
   for (const pos of positions) {
     if (pos.status === "closed") continue;

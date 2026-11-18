@@ -331,31 +331,37 @@ check("the difference is the rung count and the size: both press at +$200, A thr
 check("Vector Exit: A, C and D can never fire (101), B stays 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 65]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
-// C closes its book at 13:30 ET and records close_1330 (2026-11-16, the owner's rule
-// 11); D adopted the same close the same day (rule 11) and A carries C's close from
-// 2026-11-18 (STEP 1 part 2). B still closes at the shared 16:00 with close_1600.
+// Every account closes its book at 15:30 ET from the 2026-11-18 session and records
+// close_1530 (the owner's trading-hours change): A, B, C and D, the same minute and the
+// same reason. 2026-11-16 remains the one full-session exception A, C and D carry, where
+// they run to the shared 16:00 and record close_1600.
 const quiet = { partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true };
 const at = (iso, system) => decideTick({ system, position: pos(quiet), price: 100.5, nowIso: iso });
-check("session close per account: A, C and D at 13:30, B at 16:00",
+check("session close per account: A, B, C and D all at 15:30 with close_1530",
   [systemCloseMinute("C"), systemCloseMinute("C_LEGACY"), systemCloseMinute("B"), systemCloseMinute("D"), systemCloseMinute("ANEW"), closeReasonFor("C"), closeReasonFor("B"), closeReasonFor("ANEW"), closeReasonFor("D")],
-  [810, 810, 960, 810, 810, "close_1330", "close_1600", "close_1330", "close_1330"]);
-// 18:29Z = 13:29 ET, 18:31Z = 13:31 ET, 21:01Z = 16:01 ET on 2026-11-16 (EST).
-check("C is still open at 13:29 and closed at 13:31 with close_1330",
-  [at("2026-11-16T18:29:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").action, at("2026-11-16T18:31:00.000Z", "C").exit_reason],
-  ["hold", "exit", "close_1330"]);
-check("C's and D's close is not close_1600 and B does not close at 13:31",
-  [at("2026-11-16T18:31:00.000Z", "C").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "D").exit_reason === "close_1600", at("2026-11-16T18:31:00.000Z", "B").action !== "exit"],
-  [false, false, true]);
-check("D is still open at 13:29 and closed at 13:31 with close_1330",
-  [at("2026-11-16T18:29:00.000Z", "D").action, at("2026-11-16T18:31:00.000Z", "D").action, at("2026-11-16T18:31:00.000Z", "D").exit_reason],
-  ["hold", "exit", "close_1330"]);
-check("on 2026-11-16 — the full-session exception A now shares with C and D — A and B both close at 16:00",
-  [at("2026-11-16T21:01:00.000Z", "B").exit_reason, at("2026-11-16T21:01:00.000Z", "ANEW").exit_reason],
-  ["close_1600", "close_1600"]);
-// From 2026-11-17 A closes with C: 18:29Z is 13:29 ET, 18:31Z is 13:31 ET.
-check("A is still open at 13:29 and closed at 13:31 with close_1330, exactly as C",
-  [at("2026-11-17T18:29:00.000Z", "ANEW").action, at("2026-11-17T18:31:00.000Z", "ANEW").action, at("2026-11-17T18:31:00.000Z", "ANEW").exit_reason, at("2026-11-17T18:31:00.000Z", "C").exit_reason],
-  ["hold", "exit", "close_1330", "close_1330"]);
+  [930, 930, 930, 930, 930, "close_1530", "close_1530", "close_1530", "close_1530"]);
+// 20:29Z = 15:29 ET, 20:31Z = 15:31 ET on 2026-11-17 (EST).
+check("B is still open at 15:29 and closed at 15:31 with close_1530",
+  [at("2026-11-17T20:29:00.000Z", "B").action, at("2026-11-17T20:31:00.000Z", "B").action, at("2026-11-17T20:31:00.000Z", "B").exit_reason],
+  ["hold", "exit", "close_1530"]);
+check("A is still open at 15:29 and closed at 15:31 with close_1530",
+  [at("2026-11-17T20:29:00.000Z", "ANEW").action, at("2026-11-17T20:31:00.000Z", "ANEW").action, at("2026-11-17T20:31:00.000Z", "ANEW").exit_reason],
+  ["hold", "exit", "close_1530"]);
+check("C and D are still open at 15:29 and closed at 15:31 with close_1530, exactly as A and B",
+  [at("2026-11-17T20:29:00.000Z", "C").action, at("2026-11-17T20:31:00.000Z", "C").exit_reason, at("2026-11-17T20:29:00.000Z", "D").action, at("2026-11-17T20:31:00.000Z", "D").exit_reason],
+  ["hold", "close_1530", "hold", "close_1530"]);
+// The 13:30 close is gone: at 13:31 ET on 2026-11-17 every account still holds.
+check("nobody closes at 13:31 any more — the book runs to 15:30",
+  [at("2026-11-17T18:31:00.000Z", "C").action, at("2026-11-17T18:31:00.000Z", "D").action, at("2026-11-17T18:31:00.000Z", "ANEW").action, at("2026-11-17T18:31:00.000Z", "B").action],
+  ["hold", "hold", "hold", "hold"]);
+// 2026-11-16 — the one full-session exception A, C and D carry — still runs to 16:00.
+// 20:31Z and 21:01Z are 15:31 and 16:01 ET on 2026-11-16 (EST).
+check("on 2026-11-16 the exception holds: A, C and D close at 16:00 with close_1600",
+  [at("2026-11-16T21:01:00.000Z", "C").exit_reason, at("2026-11-16T21:01:00.000Z", "ANEW").exit_reason, at("2026-11-16T21:01:00.000Z", "D").exit_reason],
+  ["close_1600", "close_1600", "close_1600"]);
+check("B carries no exception: it closes at 15:30 even on 2026-11-16",
+  [at("2026-11-16T20:31:00.000Z", "B").exit_reason, at("2026-11-16T21:01:00.000Z", "B").exit_reason],
+  ["close_1530", "close_1530"]);
 
 // --- REPORT ------------------------------------------------------------------
 const passed = cases.filter((c) => c.pass).length;

@@ -18,7 +18,7 @@
 // hour-old price would record a fill that never happened in the market at the close.
 //
 // It changes no rule: decideTick still decides, with the same precedence (a genuine stop at the
-// bell keeps its own reason; the session end is close_1600), and nothing here presses, sizes,
+// mark keeps its own reason; the session end is close_HHMM), and nothing here presses, sizes,
 // re-enters or re-prices anything. A halted account is refused by decideTick itself.
 //
 // The book and the writer are ARGUMENTS, not imports, so the sweep can be driven end to end

@@ -421,10 +421,11 @@ export function decideTick(args) {
     };
   }
 
-  // Rule 2b — the session end, on the account's own clock. DART C closes at 13:30 and
-  // its record says close_1330 (2026-11-16, the owner's rule 11); A, B and D close at
-  // the shared 16:00 and still record close_1600. Checked after the stops so a genuine
-  // stop at the bell keeps its own reason, exactly as the live manager's close does.
+  // Rule 2b — the session end, on the account's own clock. From the 2026-11-18 session
+  // A, B, C and D all close at 15:30 and their records say close_1530 (the owner's
+  // trading-hours change); the shared 16:00 stays as the fallback for any account
+  // without its own row. Checked after the stops so a genuine stop at the mark keeps
+  // its own reason, exactly as the live manager's close does.
   if (etMinuteOfDay(nowIso) >= systemCloseMinute(ruleKey, SESSION_CLOSE_MINUTE, nowMs)) {
     return {
       ...base,
