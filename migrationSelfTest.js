@@ -163,9 +163,9 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const gap = decideTick({ system: "B", position: pos({}), price: 50 - 150 / 400, nowIso: "2026-10-30T14:00:00Z" });
   check("vector: no score is a data gap, never a guess", gap.action, "needs_vector");
 
-  // Profit Protection: B and A (ANEW) sell 25% once at +$1,850. C sells its quarter at
-  // +$850 from 2026-11-15 (the owner's rule 6), and D adopted the same +$850 row on
-  // 2026-11-16 (rule 7). E was removed from the engine on 2026-11-10.
+  // Profit Protection: B sells 25% once at +$1,850. C sells its quarter at +$850 from
+  // 2026-11-15 (the owner's rule 6), D adopted the same +$850 row on 2026-11-16 (rule 7),
+  // and A carries C's +$850 row from 2026-11-18 (STEP 1 part 2). E was removed 2026-11-10.
   check("partial: C takes a quarter at +$850", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
   check("partial: B takes a quarter at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
   check("partial: D takes a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });

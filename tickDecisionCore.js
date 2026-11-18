@@ -19,7 +19,7 @@
 //   3. TERMINAL: hard stop (systemStop) OR protective giveback OR price-trail breach
 //   4. protective high-water ratchet
 //   5. price-trail extreme ratchet
-//   6. partial profit-taking (B, A/ANEW, C and D — 25% once at +$1,850; C from 2026-11-11)
+//   6. partial profit-taking (B at +$1,850; A/ANEW, C and D at +$850, A from 2026-11-18)
 //   7. downside Vector 65 across newly crossed loss checkpoints (P&L < 0 only)
 //   8. upside Vector grid: activation at +$900, then ±$100 steps
 //   9. presses: 3R at +$800, 2R at +$700, 1R at the system's own threshold
@@ -334,9 +334,10 @@ export function decideTick(args) {
 
   const priorPatches = [];
 
-  // Press 2 activates the trail for A, B and D. DART C's trail ARMS AT +$500 of peak
-  // P&L instead, with or without a press (2026-11-15, the owner's rule 7). The write
-  // happens on this tick, before any stop is evaluated, and can never itself breach.
+  // Press 2 activates the trail for B. DART C's trail ARMS AT +$500 of peak P&L instead,
+  // with or without a press (2026-11-15, the owner's rule 7), and DART A's is the same
+  // from 2026-11-18 (STEP 1 part 2: A trades C's exit set). The write happens on this
+  // tick, before any stop is evaluated, and can never itself breach.
   const trailArmsNow = isC
     ? (!pt.active && peakForTrail >= C_TRAIL_ARM_PL)
     : (!pt.active && pos.pressed_2r);
@@ -357,7 +358,10 @@ export function decideTick(args) {
   // its ONLY arming level, because the Protective Stop was removed from C — and the
   // giveback it then enforces is the $250 in C's row (protectivePolicy buffer). Armed
   // here as a state write so every later tick measures the giveback from this high-water.
-  if (ruleKey === "C_LEGACY" && !protectiveActive) {
+  // DART A carries the identical arming from 2026-11-18 (STEP 1 part 2): its level and
+  // its giveback come from C's rows in tickRules.js, so A arms here exactly as C does in
+  // every caller that reaches this function, not only in the live tick wrapper.
+  if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW") && !protectiveActive) {
     const cArm = autoArmPolicy(sys);
     if (Number.isFinite(cArm) && pl >= cArm) {
       priorPatches.push({
@@ -679,7 +683,9 @@ export function decideTick(args) {
     // The share-price trail starts at Press 2, or — on a single-press system — at its
     // one and only press.
     // A press never arms C's trail: C's trail is its own +$500 peak-P&L rule.
-    const activatesTrail = ruleKey !== "C_LEGACY" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
+    // A press arms the share-price trail on a percentage-trail account. DART C, and DART A
+    // from 2026-11-18, have no press-driven trail at all: theirs arms at +$500 of P&L.
+    const activatesTrail = ruleKey !== "C_LEGACY" && ruleKey !== "ANEW" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
     const pressEntry = {
       timestamp: nowIso,
       level: pressLevel,

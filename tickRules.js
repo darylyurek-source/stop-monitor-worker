@@ -432,3 +432,34 @@ const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase())
 export function isSystemHalted(system) {
   return HALTED.has(String(system ?? "").trim().toUpperCase());
 }
+
+// ---------------------------------------------------------------------------
+// DART A (ANEW) TRADES DART C'S EXIT RULE SET — 2026-11-18, STEP 1 part 2.
+//
+// The owner directed that A's exits be IDENTICAL to C's. Every ANEW row below is
+// ASSIGNED FROM C'S OWN LIVE ROW in this same file, at load time: not one exit
+// value is typed here, so changing C changes A with it and the two accounts cannot
+// drift. C's live row is C_LEGACY wherever a position resolves through ruleKeyFor()
+// (the hard loss stop, the Protective Stop, the trail giveback, the session close
+// and the Vector Exit), and C's plain row for the rules the engine reads by the
+// account's own name (Profit Protection and the +$1,000 automatic arm).
+//
+// B, C and D are untouched: every row above keeps the value it had.
+//   hard loss stop / safety net  SYSTEM_HARD_STOP          -$1,200 -> C's -$400
+//   Profit Protection            SYSTEM_PARTIAL_PROFIT     +$1,850 -> C's +$850, 25%
+//   automatic hard stop          AUTO_ARM_PL_BY_SYSTEM     +$2,000 -> C's +$1,000, $250
+//   Protective Stop              PROTECTIVE_BY_SYSTEM      B's 55/65 -> C's 101/101 (off)
+//   trailing stop                TRAIL_GIVEBACK_BY_SYSTEM  price trail -> C's $100 giveback
+//   Vector Exit                  VECTOR_EXIT_BY_SYSTEM     65 -> C's 101 (off)
+//   session close                SYSTEM_CLOSE_MINUTE       16:00 -> C's 13:30, close_1330
+//   presses                      CLONE_PRESS1 / PRESS_PLAN - already identical to C's:
+//                                +$250, then +$700, then +$800, $40,000 each
+// ---------------------------------------------------------------------------
+SYSTEM_HARD_STOP.ANEW = SYSTEM_HARD_STOP.C_LEGACY;
+SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;
+AUTO_ARM_PL_BY_SYSTEM.ANEW = AUTO_ARM_PL_BY_SYSTEM.C;
+PROTECTIVE_BY_SYSTEM.ANEW = PROTECTIVE_BY_SYSTEM.C_LEGACY;
+TRAIL_GIVEBACK_BY_SYSTEM.ANEW = TRAIL_GIVEBACK_BY_SYSTEM.C_LEGACY;
+VECTOR_EXIT_BY_SYSTEM.ANEW = VECTOR_EXIT_BY_SYSTEM.C_LEGACY;
+SYSTEM_CLOSE_MINUTE.ANEW = SYSTEM_CLOSE_MINUTE.C_LEGACY;
+FULL_SESSION_CLOSE_DATES.ANEW = FULL_SESSION_CLOSE_DATES.C_LEGACY;
