@@ -119,18 +119,21 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
 // --- 4. the press ladder ------------------------------------------------------
 {
   const lvl = press1Threshold("B");
-  check("press: B's Press 1 level", lvl, 250);
+  check("press: B's Press 1 level", lvl, 200);
   const p1 = decideTick({ system: "B", position: pos({}), price: 50 + lvl / 400 + 0.01, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("press: Press 1 fires at its level", p1.action, "press");
   check("press: Press 1 size is $40,000 of stock", p1.press_level, "1R");
   check("press: shares added", p1.shares_added, Math.floor(40000 / (50 + lvl / 400 + 0.01)));
 
-  const p2 = decideTick({ system: "B", position: pos({ pressed_1r: true }), price: 50 + 700 / 400 + 0.01, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
-  check("press: Press 2 at +$700", p2.press_level, "2R");
+  const p2 = decideTick({ system: "B", position: pos({ pressed_1r: true }), price: 50 + 400 / 400 + 0.01, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("press: Press 2 at +$400", p2.press_level, "2R");
   check("press: Press 2 activates the price trail", p2.patch.price_trail_active, true);
 
-  const p3 = decideTick({ system: "B", position: pos({ pressed_1r: true, pressed_2r: true }), price: 50 + 800 / 400 + 0.01, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
-  check("press: Press 3 at +$800", p3.press_level, "3R");
+  // Press 3 is +$1,100 from 2026-11-18, above the +$900 upside grid, so the grid is handed
+  // in already standing at +$1,100 and the press is the next rule to act.
+  const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
+  const p3 = decideTick({ system: "B", position: pos({ pressed_1r: true, pressed_2r: true, ...gridAt1100 }), price: 50 + 1100 / 400 + 0.01, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
+  check("press: Press 3 at +$1,100", p3.press_level, "3R");
   const noRepress = decideTick({ system: "B", position: pos({ pressed_1r: true, pressed_2r: true, pressed_3r: true }), price: 50 + 900 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("press: a completed ladder never presses again", noRepress.action !== "press", true);
 }

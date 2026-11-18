@@ -22,8 +22,8 @@
 // liveTradeMath.ts
 // ---------------------------------------------------------------------------
 export const PRESS_SIZE_USD = 40000;
-export const PRESS2 = 700;
-export const PRESS3 = 800;
+export const PRESS2 = 400;
+export const PRESS3 = 1100;
 export const TARGET = 900;
 export const STOP = -1700;
 // The upside grid's step (cloneTick.ts evaluates last_profit_level ± 100).
@@ -62,29 +62,30 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // ---------------------------------------------------------------------------
 // cloneSystems.ts — Press 1 is the ONE setting that differs per system.
 // ---------------------------------------------------------------------------
-// DART D is B's rule set plus ONE change — a single Press instead of B's three — and
-// from 2026-11-18 that press fires at +$200 (the owner's STEP 6: D is A's rule set with
-// the press as its only difference). Its SIZE is the difference, not its trigger: see
-// PRESS_PLAN below. Every other system here presses at +$250.
+// Press 1 is +$200 on every live system from 2026-11-18: A, B and C moved from +$250 to
+// +$200 (the owner's press-level change), and D already fired there from the same session
+// (its own STEP 6 row). D's difference from A is the SIZE and the number of rungs, not the
+// trigger: see PRESS_PLAN below. E is the decommissioned account's leftover key and is
+// never resolved by a live position.
 export const CLONE_PRESS1 = {
-  B: 250,
-  C: 250,
+  B: 200,
+  C: 200,
   D: 200,
   E: 250,
-  ANEW: 250,
+  ANEW: 200,
 };
 
 export function press1Threshold(system) {
   const v = CLONE_PRESS1[String(system ?? "").trim().toUpperCase()];
   if (Number.isFinite(Number(v))) return Number(v);
   const c = CLONE_PRESS1.C;
-  return Number.isFinite(Number(c)) ? Number(c) : 250;
+  return Number.isFinite(Number(c)) ? Number(c) : 200;
 }
 
 // ---------------------------------------------------------------------------
 // cloneSystems.ts — pressPlan(). WHICH PRESSES a system takes, and whether the
 // share-price trail starts at the first one. A system with no row presses the shared
-// three times (+$700, +$800 after its own Press 1) at the fixed $40,000.
+// three times (+$400, +$1,100 after its own Press 1) at the fixed $40,000.
 //
 // DART D (2026-11-08, retuned 2026-11-10, level +$200 from 2026-11-18) is the one
 // exception: ONE press, at D's own level, sized at the moment it fires from D's own daily
@@ -454,7 +455,7 @@ export function isSystemHalted(system) {
 //   Vector Exit                  VECTOR_EXIT_BY_SYSTEM     65 -> C's 101 (off)
 //   session close                SYSTEM_CLOSE_MINUTE       16:00 -> C's 13:30, close_1330
 //   presses                      CLONE_PRESS1 / PRESS_PLAN - already identical to C's:
-//                                +$250, then +$700, then +$800, $40,000 each
+//                                +$200, then +$400, then +$1,100, $40,000 each
 // ---------------------------------------------------------------------------
 SYSTEM_HARD_STOP.ANEW = SYSTEM_HARD_STOP.C_LEGACY;
 SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;

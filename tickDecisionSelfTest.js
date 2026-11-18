@@ -48,7 +48,7 @@ function check(name, actual, expected) {
 }
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
-check("Press 1 per system (D presses earlier, +$200, from 2026-11-18)", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 200]);
+check("Press 1 per system: A, B, C and D all press at +$200 from 2026-11-18", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [200, 200, 200, 200]);
 check("hard stop per system: A -$400 (C's row from 2026-11-18), B -$1,200, C -$400, D -$400 (D adopted C's rule set 2026-11-16)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -1200, -400, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
 // with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
@@ -117,10 +117,12 @@ check("a price back above the level holds and writes no exit", [tick("B", deep()
 check("without confirmation one print still exits (replay and sweeps unchanged)", tick("B", deep(), 94).action, "exit");
 check("the confirmation covers every account's own stop", [tick("ANEW", deep(), 94, { hardStopConfirm: arming }).action, tick("C", deep(), 94, { hardStopConfirm: arming }).action, tick("D", deep(), 94, { hardStopConfirm: arming }).action], ["pending_confirm", "pending_confirm", "pending_confirm"]);
 
-// --- 2. PRESS 1 (B at +$250) --------------------------------------------------
-const t2 = tick("B", pos(), 101.25);
-check("press 1 at +$250", [t2.action, t2.event, t2.pl_raw], ["press", "press1", 250]);
-check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after, t2.commission_fees], [395, 59993.75, 595, 5.46]);
+// --- 2. PRESS 1 (B at +$200) --------------------------------------------------
+// 200 sh at $101.00 -> P&L $200, sized $40,000 at that price -> 396 shares.
+// Fees: commission 1.39 + clearing 0.08 + slippage 4.00.
+const t2 = tick("B", pos(), 101.0);
+check("press 1 at +$200", [t2.action, t2.event, t2.pl_raw], ["press", "press1", 200]);
+check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after, t2.commission_fees], [396, 59996, 596, 5.47]);
 
 // --- 3. DART D's ONE PRESS (at +$200, sized by its daily buying power) --------
 // D is A's rule set with ONE difference: a single press at D's own level, +$200 from
@@ -133,7 +135,7 @@ check("D press arithmetic", [t3.shares_added, t3.shares_after, t3.patch.tcb, t3.
 check("D's press does not start the trail (rule 8 arms it at +$500)", [t3.patch.price_trail_active ?? null, t3.patch.price_trail_extreme ?? null, t3.patch.pressed_2r, t3.patch.pressed_3r], [null, null, false, false]);
 // D holds just under its own level, where B would still not have pressed either.
 check("D does not press at +$199.99", tick("D", pos(), 100.99995, { halted: false, pressSizeUsd: 10100 }).action, "hold");
-// No second rung exists: above +$700 and +$800 a pressed D still only holds.
+// No second rung exists: above +$400 and +$1,100 a pressed D still only holds.
 const t3b = tick("D", pos({ pressed_1r: true, shares: 300, tcb: 30100, price_trail_active: true, price_trail_extreme: 101.0 }), 103, { halted: false, pressSizeUsd: 10100 });
 check("D never presses twice", [t3b.action, t3b.event], ["hold", "hold"]);
 // An unmeasured press is never guessed, and less than $20,000 free is a skip.
@@ -232,8 +234,14 @@ check("A's trail arms exactly at +$500 and writes no price extreme", [(aArmLow.p
 check("the giveback rows are C, C_LEGACY, D and A; B keeps the price trail", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, null, 100, 100, 100]);
 
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
-const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000 }), 102);
-check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 392, 792, 5.45]);
+// 400 sh at $102.75 -> P&L $1,100, sized $40,000 at that price -> 389 shares.
+// Fees: commission 1.36 + clearing 0.08 + slippage 4.00.
+// Press 3 moved to +$1,100 on 2026-11-18, so it now sits ABOVE the +$900 upside grid:
+// the grid's checkpoint is resolved first, which is why the position is handed in with
+// the grid already standing at +$1,100. The press rule itself is untouched.
+const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
+const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
+check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 389, 789, 5.44]);
 
 // --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
 // No DART is halted today — A, B, C and D all trade and E is gone from the engine —
@@ -314,12 +322,12 @@ const armD = tick("D", pos({ partial_profit_taken: true }), 105, { halted: false
 check("A and D decide a +$1,000 tick identically: same action, same two state writes (the +$500 trail arm, then the automatic arm at +$1,000)",
   [armA.action, armD.action, (armA.prior_patches || []).length, (armD.prior_patches || []).length, JSON.stringify(armA.prior_patches) === JSON.stringify(armD.prior_patches)],
   ["needs_vector", "needs_vector", 2, 2, true]);
-// The ONE difference: A presses three times from +$250 at $40,000; D presses once at
-// +$200 from its buying power. Same press code, different level and size.
+// The ONE difference: same +$200 level, but A takes three rungs at a fixed $40,000 each
+// and D takes a single rung sized from its buying power.
 const pA = tick("ANEW", pos(), 101.25, { halted: false });
-check("the one difference is the press: A presses at +$250, D at +$200, and D has a single rung",
+check("the difference is the rung count and the size: both press at +$200, A three times at $40,000, D once from buying power",
   [pA.event, pA.pl_raw, pA.press_size_usd, pA.shares_added, press1Threshold("ANEW"), press1Threshold("D"), pressPlan("ANEW"), pressPlan("D").single],
-  ["press1", 250, 40000, 395, 250, 200, null, true]);
+  ["press1", 250, 40000, 395, 200, 200, null, true]);
 check("Vector Exit: A, C and D can never fire (101), B stays 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 65]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------

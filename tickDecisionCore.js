@@ -22,7 +22,7 @@
 //   6. partial profit-taking (B at +$1,850; A/ANEW, C and D at +$850, A from 2026-11-18)
 //   7. downside Vector 65 across newly crossed loss checkpoints (P&L < 0 only)
 //   8. upside Vector grid: activation at +$900, then ±$100 steps
-//   9. presses: 3R at +$800, 2R at +$700, 1R at the system's own threshold
+//   9. presses: 3R at +$1,100, 2R at +$400, 1R at the system's own threshold
 //  10. hold: display-only marks
 //
 // THE VECTOR SCORE: computed from 1-minute candles by the Vector module (a separate
