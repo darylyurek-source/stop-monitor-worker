@@ -314,8 +314,10 @@ export function decideTick(args) {
 
   const peakForTrail = Math.max(Number(pos.peak_pl) || 0, pl);
   // Driven by the system's ROW, not by C's name (2026-11-16): D carries the identical
-  // $100 giveback trail, so both resolve here. A and B have no row and keep the
-  // share-price percentage trail, unchanged.
+  // $100 giveback trail, so both resolve here. A and B have no row, so both run the
+  // share-price percentage trail the tier at line 326 feeds them: it arms at Press 2 at
+  // 1.75% below the high, tightening to 1.00% once peak P&L reaches +$500, 0.75% at
+  // +$700, 0.50% at +$900, and 0.25% at +$1,100.
   const trailGiveback = trailGivebackFor(ruleKey);
   const isC = trailGiveback != null;
   // DART C's trail is a $100 DOLLAR GIVEBACK (2026-11-16, the owner's rule 7): it arms
