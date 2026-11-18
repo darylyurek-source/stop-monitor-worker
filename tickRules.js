@@ -63,13 +63,13 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // cloneSystems.ts — Press 1 is the ONE setting that differs per system.
 // ---------------------------------------------------------------------------
 // DART D is B's rule set plus ONE change — a single Press instead of B's three — and
-// that press fires at B's own Press 1 level, +$250 (2026-11-10, before the fresh
-// test). Its SIZE is the difference, not its trigger: see PRESS_PLAN below. Every
-// system here presses at +$250.
+// from 2026-11-18 that press fires at +$200 (the owner's STEP 6: D is A's rule set with
+// the press as its only difference). Its SIZE is the difference, not its trigger: see
+// PRESS_PLAN below. Every other system here presses at +$250.
 export const CLONE_PRESS1 = {
   B: 250,
   C: 250,
-  D: 250,
+  D: 200,
   E: 250,
   ANEW: 250,
 };
@@ -86,9 +86,10 @@ export function press1Threshold(system) {
 // share-price trail starts at the first one. A system with no row presses the shared
 // three times (+$700, +$800 after its own Press 1) at the fixed $40,000.
 //
-// DART D (2026-11-08, retuned 2026-11-10) is the one exception: ONE press, at +$250,
-// sized at the moment it fires from D's own daily buying power, and the share-price
-// trailing stop starts at that press instead of at a Press 2 that no longer exists.
+// DART D (2026-11-08, retuned 2026-11-10, level +$200 from 2026-11-18) is the one
+// exception: ONE press, at D's own level, sized at the moment it fires from D's own daily
+// buying power ($120,000 or the free balance, skipped below $20,000 free). Its trail is the
+// +$500 / $100 P&L giveback, never a press trail.
 // ---------------------------------------------------------------------------
 export const PRESS_PLAN = {
   D: { single: true, dynamicSize: true, trailAtFirstPress: false },

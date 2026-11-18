@@ -176,14 +176,14 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
   const twice = decideTick({ system: "B", position: pos({ partial_profit_taken: true, shares: 300, tcb: 15000 }), price: 50 + 1900 / 300, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("partial: never fires twice", twice.action !== "partial", true);
 
-  // DART D (2026-11-16, the owner's rule 6): ONE press at +$250, sized by its caller
+  // DART D (2026-11-16, level +$200 from 2026-11-18, the owner's STEP 6): ONE press, sized
   // against the day's buying power. No Press 2 and no Press 3 exist on D, and the press
   // no longer starts a trail — rule 8 arms D's $100 giveback trail at +$500 of P&L.
   const dPress = decideTick({
-    system: "D", halted: false, position: pos({}), price: 50 + 250 / 400,
+    system: "D", halted: false, position: pos({}), price: 50 + 200 / 400,
     pressSizeUsd: 20250, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
   });
-  check("press: D presses once at +$250", dPress.action, "press");
+  check("press: D presses once at +$200", dPress.action, "press");
   check("press: D's one press adds the sized amount", [dPress.shares_added, dPress.shares_after], [400, 800]);
   check("press: D's press does not start the trail (rule 8 arms it at +$500)", dPress.patch.price_trail_active ?? false, false);
   check("press: D never takes a Press 2", dPress.patch.pressed_2r, false);
@@ -193,7 +193,7 @@ check("close: 15:59 EDT is not", etMinuteOfDay("2026-10-29T19:59:00Z") >= SESSIO
     price: 50 + 750 / 800, pressSizeUsd: 20250, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5,
   });
   check("press: D takes no press above +$700 or +$800", dSecond.action, "hold");
-  const dNoBudget = decideTick({ system: "D", halted: false, position: pos({}), price: 50 + 250 / 400, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5 });
+  const dNoBudget = decideTick({ system: "D", halted: false, position: pos({}), price: 50 + 200 / 400, nowIso: "2026-11-06T15:00:00Z", vectorScore: 5 });
   check("press: D never presses an unmeasured amount", dNoBudget.action, "needs_budget");
 }
 

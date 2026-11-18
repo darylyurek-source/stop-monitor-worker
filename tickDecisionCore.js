@@ -361,7 +361,10 @@ export function decideTick(args) {
   // DART A carries the identical arming from 2026-11-18 (STEP 1 part 2): its level and
   // its giveback come from C's rows in tickRules.js, so A arms here exactly as C does in
   // every caller that reaches this function, not only in the live tick wrapper.
-  if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW") && !protectiveActive) {
+  // DART D arms here too from 2026-11-18 (the owner's STEP 6): D is A's rule set with the
+  // press as its only difference, so its arming resolves in every caller A's does, from D's
+  // own +$1,000 row. B keeps its own +$2,000 row in engineShadow, unchanged.
+  if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW" || ruleKey === "D") && !protectiveActive) {
     const cArm = autoArmPolicy(sys);
     if (Number.isFinite(cArm) && pl >= cArm) {
       priorPatches.push({

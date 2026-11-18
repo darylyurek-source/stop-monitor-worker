@@ -48,7 +48,7 @@ function check(name, actual, expected) {
 }
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
-check("Press 1 per system", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 250]);
+check("Press 1 per system (D presses earlier, +$200, from 2026-11-18)", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [250, 250, 250, 200]);
 check("hard stop per system: A -$400 (C's row from 2026-11-18), B -$1,200, C -$400, D -$400 (D adopted C's rule set 2026-11-16)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -1200, -400, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
 // with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
@@ -59,7 +59,7 @@ check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entr
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
 check("protective policy: A carries C's row from 2026-11-18 — 101/101 and $250, so no Vector can arm an A position; B keeps 55/65 and $350; D 101/101 and $250", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 55, 65, 350, 101, 101, 250, 101, 101, 250]);
-check("D runs C's rule set (no Protective Stop) and D's own press is +$250", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 250, true]);
+check("D runs A's rule set (no Protective Stop) and D's own press is +$200", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 200, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
 check("Profit Protection: A(ANEW) sells 25% at +$850 from 2026-11-18, as C and D do; B sells 25% at +$1,850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
@@ -122,21 +122,23 @@ const t2 = tick("B", pos(), 101.25);
 check("press 1 at +$250", [t2.action, t2.event, t2.pl_raw], ["press", "press1", 250]);
 check("press 1 sizing and cost", [t2.shares_added, t2.patch.tcb, t2.shares_after, t2.commission_fees], [395, 59993.75, 595, 5.46]);
 
-// --- 3. DART D's ONE PRESS (at +$250, sized by its daily buying power) --------
-// D is B's rule set plus ONE change: a single press at B's own Press 1 level, +$250,
-// sized at the moment it fires from D's buying power for the day (2026-11-10, before
-// the fresh test). 200 sh at 101.25 -> P&L $250, sized $10,100 at that price -> 99
-// shares. Fees: commission 0.35 + clearing 0.02 + slippage 1.00.
-const t3 = tick("D", pos(), 101.25, { halted: false, pressSizeUsd: 10100 });
-check("D presses once at +$250", [t3.action, t3.event, t3.pl_raw, t3.press_size_usd, t3.press_level], ["press", "press1", 250, 10100, "1R"]);
-check("D press arithmetic", [t3.shares_added, t3.shares_after, t3.patch.tcb, t3.commission_fees], [99, 299, 30023.75, 1.37]);
+// --- 3. DART D's ONE PRESS (at +$200, sized by its daily buying power) --------
+// D is A's rule set with ONE difference: a single press at D's own level, +$200 from
+// 2026-11-18 (STEP 6), sized at the moment it fires from D's buying power for the day
+// ($120,000 cap, skipped under $20,000 free). 200 sh at 101.00 -> P&L $200, sized
+// $10,100 at that price -> 100 shares. Fees: commission 0.35 + clearing 0.02 + slippage 1.01.
+const t3 = tick("D", pos(), 101.0, { halted: false, pressSizeUsd: 10100 });
+check("D presses once at +$200", [t3.action, t3.event, t3.pl_raw, t3.press_size_usd, t3.press_level], ["press", "press1", 200, 10100, "1R"]);
+check("D press arithmetic", [t3.shares_added, t3.shares_after, t3.patch.tcb, t3.commission_fees], [100, 300, 30100, 1.38]);
 check("D's press does not start the trail (rule 8 arms it at +$500)", [t3.patch.price_trail_active ?? null, t3.patch.price_trail_extreme ?? null, t3.patch.pressed_2r, t3.patch.pressed_3r], [null, null, false, false]);
+// D holds just under its own level, where B would still not have pressed either.
+check("D does not press at +$199.99", tick("D", pos(), 100.99995, { halted: false, pressSizeUsd: 10100 }).action, "hold");
 // No second rung exists: above +$700 and +$800 a pressed D still only holds.
-const t3b = tick("D", pos({ pressed_1r: true, shares: 299, tcb: 30023.75, price_trail_active: true, price_trail_extreme: 101.25 }), 103, { halted: false, pressSizeUsd: 10100 });
+const t3b = tick("D", pos({ pressed_1r: true, shares: 300, tcb: 30100, price_trail_active: true, price_trail_extreme: 101.0 }), 103, { halted: false, pressSizeUsd: 10100 });
 check("D never presses twice", [t3b.action, t3b.event], ["hold", "hold"]);
 // An unmeasured press is never guessed, and less than $20,000 free is a skip.
-check("D without today's budget does not press", tick("D", pos(), 101.25, { halted: false }).action, "needs_budget");
-check("D under the $20,000 floor skips", tick("D", pos(), 101.25, { halted: false, pressBudgetFree: 15000 }).reason, "press_budget_floor");
+check("D without today's budget does not press", tick("D", pos(), 101.0, { halted: false }).action, "needs_budget");
+check("D under the $20,000 floor skips", tick("D", pos(), 101.0, { halted: false, pressBudgetFree: 15000 }).reason, "press_budget_floor");
 
 // --- 4. A (ANEW) CARRIES C'S 25% SALE AT +$850 -------------------------------
 // A trades C's exit set from 2026-11-18, so its Profit Protection is C's: a quarter,
@@ -287,7 +289,7 @@ check("A sells C's quarter at +$850 (A carries C's exit set from 2026-11-18)", p
 check("D sells a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });
 check("C sells a quarter at +$850 from 2026-11-15 (the owner's rule 6)", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
-check("D's single press is +$250, sized from buying power, and does NOT start the trail (rule 8 arms it at +$500)", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [250, true, true, false]);
+check("D's single press is +$200, sized from buying power, and does NOT start the trail (rule 8 arms it at +$500)", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [200, true, true, false]);
 // The Protective Stop and the Vector Exit were REMOVED from C on 2026-11-15 and from D on
 // 2026-11-16 (the owner's rule sets): both thresholds are unreachable on every C and D row,
 // so neither rule can act on a C or a D position. A carries C's rows from 2026-11-18;
@@ -298,6 +300,26 @@ check(
   [101, 101, 101, 101, 101, 101, 55, 65]
 );
 check("giveback after the automatic arm: A, C and D $250, B $350", [protectivePolicy("ANEW").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 250, 250, 350]);
+
+// --- 18b. D IS A'S RULE SET, PRESS ASIDE (2026-11-18, the owner's STEP 6) ------
+// Every exit row D resolves must equal A's, row for row: the hard stop, the Protective
+// Stop, Profit Protection, the automatic arm and its giveback, the trail giveback, the
+// Vector Exit and the session close. The press is the one difference.
+check("D's every exit row equals A's, field for field",
+  [systemStop("D"), protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("D").buffer, partialProfitPolicy("D"), autoArmPolicy("D"), trailGivebackFor("D"), vectorExitThreshold("D"), systemCloseMinute("D"), closeReasonFor("D")],
+  [systemStop("ANEW"), protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, partialProfitPolicy("ANEW"), autoArmPolicy("ANEW"), trailGivebackFor("ANEW"), vectorExitThreshold("ANEW"), systemCloseMinute("ANEW"), closeReasonFor("ANEW")]);
+// The automatic arm resolves inside decideTick for both accounts, with the same patch.
+const armA = tick("ANEW", pos({ partial_profit_taken: true }), 105, { halted: false });
+const armD = tick("D", pos({ partial_profit_taken: true }), 105, { halted: false });
+check("A and D decide a +$1,000 tick identically: same action, same two state writes (the +$500 trail arm, then the automatic arm at +$1,000)",
+  [armA.action, armD.action, (armA.prior_patches || []).length, (armD.prior_patches || []).length, JSON.stringify(armA.prior_patches) === JSON.stringify(armD.prior_patches)],
+  ["needs_vector", "needs_vector", 2, 2, true]);
+// The ONE difference: A presses three times from +$250 at $40,000; D presses once at
+// +$200 from its buying power. Same press code, different level and size.
+const pA = tick("ANEW", pos(), 101.25, { halted: false });
+check("the one difference is the press: A presses at +$250, D at +$200, and D has a single rung",
+  [pA.event, pA.pl_raw, pA.press_size_usd, pA.shares_added, press1Threshold("ANEW"), press1Threshold("D"), pressPlan("ANEW"), pressPlan("D").single],
+  ["press1", 250, 40000, 395, 250, 200, null, true]);
 check("Vector Exit: A, C and D can never fire (101), B stays 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 65]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
