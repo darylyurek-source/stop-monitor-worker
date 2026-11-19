@@ -57,7 +57,8 @@ check("B has NO Profit Protection; A, C and D sell 25% at +$850",
 check("B has NO automatic hard stop; A, C and D arm at +$1,000",
   [autoArmPolicy("B"), autoArmPolicy("ANEW"), autoArmPolicy("C"), autoArmPolicy("D")], [null, 1000, 1000, 1000]);
 check("B's Protective Stop arms on the Vector test alone: 55 / 65 with a $350 giveback",
-  [protectivePolicy("B").stock, protectivePolicy("B").market, protectivePolicy("B").buffer], [55, 65, 350]);
+  [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer],
+  [55, 65, 350]);
 check("B's Vector Exit stays 65", vectorExitThreshold("B"), 65);
 check("B's share-price trail ladder: 1.00% at +$1,500, 0.75% at +$2,000, 0.50% at +$2,500, 0.35% at +$3,500, and 1.75% below",
   [1400, 1600, 2100, 2600, 3600].map((p) => bProfitTrailPct(p)), [null, 0.01, 0.0075, 0.005, 0.0035]);
@@ -74,12 +75,15 @@ const press1 = tick("B", pos(), 101.25, { vectorScore: 5 });
 check("B presses at +$250: $40,000 / $101.25 = 395 shares, tcb $59,993.75",
   [press1.action, press1.event, press1.shares_added, press1.patch.tcb],
   ["press", "press1", 395, 59993.75]);
-check("Press 2 arms B's trail", press1.patch.price_trail_active, true);
+check("Press 1 does NOT arm B's trail — it arms at Press 2",
+  press1.patch.price_trail_active ?? null, null);
 
 // 596 sh, tcb $59,996: the price that puts P&L at $700 is (59,996 + 700) / 596.
 const rung2 = pos({ pressed_1r: true, shares: 596, tcb: 59996, peak_pl: 400 });
 check("B holds just under its +$700 Press 2", tick("B", rung2, (59996 + 699) / 596, { vectorScore: 5 }).action, "hold");
-check("B presses at +$700", tick("B", rung2, (59996 + 700.5) / 596, { vectorScore: 5 }).event, "press2");
+const press2 = tick("B", rung2, (59996 + 700.5) / 596, { vectorScore: 5 });
+check("B presses at +$700", press2.event, "press2");
+check("Press 2 arms B's trail", press2.patch.price_trail_active, true);
 // 992 sh, tcb $99,992: the price that puts P&L at $800 is (99,992 + 800) / 992.
 const rung3 = pos({ pressed_1r: true, pressed_2r: true, shares: 992, tcb: 99992, peak_pl: 800 });
 check("B presses at +$800", tick("B", rung3, (99992 + 800.5) / 992, { vectorScore: 5 }).event, "press3");
@@ -89,9 +93,12 @@ check("B's hard loss stop closes at -$1,700 on one print",
    tick("B", pos(), 91.5, { vectorScore: 5 }).gross_pl],
   ["exit", "realtime_stop_close", -1700]);
 check("B holds just above -$1,700", tick("B", pos(), 91.6, { vectorScore: 5 }).action, "hold");
-// 200 sh, tcb $20,000: +$1,850 sits at $109.25 — a level B no longer acts on.
-check("B does NOT take a 25% sale at +$1,850",
-  tick("B", pos({ peak_pl: 1850 }), 109.25, { vectorScore: 5 }).event, "profit_grid");
+// 200 sh, tcb $20,000: +$1,850 sits at $109.25 — a level B no longer sells into. It is
+// past the +$900 upside grid activation, which is B's and unchanged; what must never
+// happen is a partial sale.
+const at1850 = tick("B", pos({ peak_pl: 1850 }), 109.25, { vectorScore: 5 });
+check("B takes NO 25% sale at +$1,850 (the +$900 grid still activates)",
+  [at1850.action === "partial", at1850.event === "partial_profit_exit"], [false, false]);
 // 200 sh, tcb $20,000: +$2,000 sits at $110.00 — a level B no longer arms at.
 const armLevel = tick("B", pos({ peak_pl: 1900 }), 110, { vectorScore: 5 });
 check("B does NOT arm an automatic hard stop at +$2,000",
