@@ -39,7 +39,7 @@
 //
 // Paper only. USD. No trading state is held between calls.
 
-import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, press1Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor } from "./tickRules.js";
+import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, bProfitTrailPct, press1Threshold, press2Threshold, press3Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
 // --- the 16:00 ET session end ------------------------------------------------
@@ -325,7 +325,11 @@ export function decideTick(args) {
   // P&L reached since arming minus $100. It measures P&L, not share price, so no price
   // extreme is written for C and the percentage ladder below is never reached by a C
   // position (it stays for the read-only studies).
-  const tierPct = isC ? null : cProfitTrailPct(peakForTrail);
+  // DART B runs ITS OWN ladder (restored 2026-11-19): 1.75% below the high until peak P&L
+  // reaches +$1,500, then 1.00% / 0.75% / 0.50% / 0.35% at +$1,500 / +$2,000 / +$2,500 /
+  // +$3,500. Every other price-trail account keeps the shared cProfitTrailPct ladder.
+  const isB = String(ruleKey).toUpperCase() === "B";
+  const tierPct = isC ? null : (isB ? bProfitTrailPct(peakForTrail) : cProfitTrailPct(peakForTrail));
   let pt = isC
     ? { active: !!pos.price_trail_active, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
     : assessPriceTrail(pos, price, tierPct);
@@ -627,8 +631,10 @@ export function decideTick(args) {
   const plan = pressPlan(sys);
   const single = plan?.single === true;
   const press1Level = press1Threshold(sys);
-  const wantPress3 = !single && pl >= PRESS3 && !!pos.pressed_1r && !!pos.pressed_2r && !pos.pressed_3r;
-  const wantPress2 = !single && pl >= PRESS2 && !!pos.pressed_1r && !pos.pressed_2r;
+  // Rungs 2 and 3 are per account: DART B's restored 2026-11-06 configuration fires them at
+  // +$700 and +$800 (its own rows), every other account at the shared +$400 / +$1,100.
+  const wantPress3 = !single && pl >= press3Threshold(sys) && !!pos.pressed_1r && !!pos.pressed_2r && !pos.pressed_3r;
+  const wantPress2 = !single && pl >= press2Threshold(sys) && !!pos.pressed_1r && !pos.pressed_2r;
   const wantPress1 = pl >= press1Level && !pos.pressed_1r;
 
   if (wantPress3 || wantPress2 || wantPress1) {

@@ -67,8 +67,9 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // (its own STEP 6 row). D's difference from A is the SIZE and the number of rungs, not the
 // trigger: see PRESS_PLAN below. E is the decommissioned account's leftover key and is
 // never resolved by a live position.
+// DART B's row is +$250 again: its 2026-11-06 configuration, restored 2026-11-19.
 export const CLONE_PRESS1 = {
-  B: 200,
+  B: 250,
   C: 200,
   D: 200,
   E: 250,
@@ -80,6 +81,25 @@ export function press1Threshold(system) {
   if (Number.isFinite(Number(v))) return Number(v);
   const c = CLONE_PRESS1.C;
   return Number.isFinite(Number(c)) ? Number(c) : 200;
+}
+
+// DART B was RESTORED to its 2026-11-06 end-of-day configuration at 12:10 PM ET on
+// 2026-11-19 (the owner's direction): Press 2 is +$700 and Press 3 +$800, its Press 1 is
+// +$250 (CLONE_PRESS1.B below), all three at $40,000 and in order as before. A, C and D
+// keep +$400 and +$1,100 untouched. Nothing else about a press moves.
+export const B_PRESS2 = 700;
+export const B_PRESS3 = 800;
+
+function ruleIsB(system) {
+  return String(system ?? "").trim().toUpperCase() === "B";
+}
+
+export function press2Threshold(system) {
+  return ruleIsB(system) ? B_PRESS2 : PRESS2;
+}
+
+export function press3Threshold(system) {
+  return ruleIsB(system) ? B_PRESS3 : PRESS3;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +192,10 @@ export function ruleKeyFor(system, position) {
 // decided on the two-print rule the price gate already enforces. C_LEGACY carries the
 // same number — it is the only C row a position can resolve to. A, B and D are NOT
 // changed.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -400 };
+// DART B's row is -$1,700 again (its 2026-11-06 configuration, restored 2026-11-19) and it
+// closes on ONE qualifying print, as it did then. A, C and D keep their own rows and the
+// two-print rule untouched.
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1700, C: -400, C_LEGACY: -400, D: -400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -191,7 +214,8 @@ export function systemStop(system) {
 // per position at +$1,850, exactly as B does. E was removed from the engine on
 // 2026-11-10, so it has no row here.
 export const SYSTEM_PARTIAL_PROFIT = {
-  B: { threshold: 1850, fraction: 0.25 }, // DART B — the standard, from 2026-11-10
+  // DART B has NO row again (restored 2026-11-19 to its 2026-11-06 configuration): it
+  // never sells a position partially — every position is held to its own exits.
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
   D: { threshold: 850, fraction: 0.25 }, // DART D (2026-11-16): C's rule set — 25% once at +$850
   // DART C (set 2026-11-11, after that day's close): C runs B's rules EXACTLY from
@@ -212,7 +236,8 @@ export const SYSTEM_PARTIAL_PROFIT = {
 // below holds ($350 for A, B and C, $700 for D from 2026-11-11). Below +$2,000 the
 // Vector test is unchanged, so a position can still arm earlier on deterioration.
 export const AUTO_ARM_PL_BY_SYSTEM = {
-  B: 2000,
+  // DART B has NO row again (restored 2026-11-19): no automatic hard stop — its $350
+  // Protective Stop arms on the Vector test alone, exactly as on 2026-11-06.
   ANEW: 2000,
   D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
@@ -321,6 +346,25 @@ export function cProfitTrailPct(peakPl) {
   return null;
 }
 
+// DART B's OWN share-price trail ladder (restored 2026-11-19 to its 2026-11-06
+// configuration): armed at Press 2, 1.75% below the high, tightening to 1.00% once peak
+// P&L reaches +$1,500, 0.75% at +$2,000, 0.50% at +$2,500 and 0.35% at +$3,500. Below
+// +$1,500 this returns null, so B keeps the base PRICE_TRAIL_PCT of 1.75%. A, C and D are
+// untouched: C and D run their $100 P&L giveback, A its own row.
+export const B_PROFIT_TRAIL_TIERS = [
+  { min_peak_pl: 3500, pct: 0.0035 },
+  { min_peak_pl: 2500, pct: 0.005 },
+  { min_peak_pl: 2000, pct: 0.0075 },
+  { min_peak_pl: 1500, pct: 0.01 },
+];
+
+export function bProfitTrailPct(peakPl) {
+  const peak = Number(peakPl);
+  if (!Number.isFinite(peak)) return null;
+  for (const t of B_PROFIT_TRAIL_TIERS) if (peak >= t.min_peak_pl) return t.pct;
+  return null;
+}
+
 // DART C (2026-11-16, the owner's rule 7 as amended): C's trail is a FIXED $100 DOLLAR
 // GIVEBACK, not a percentage of price. It still ARMS at +$500 of peak P&L; once armed,
 // C closes on the first valid print whose P&L is at or below the highest P&L reached
@@ -353,7 +397,7 @@ export function trailGivebackFor(system) {
 // ---------------------------------------------------------------------------
 export const SYSTEM_CLOSE_MINUTE = {
   ANEW: 15 * 60 + 0,
-  B: 15 * 60 + 0,
+  B: 15 * 60 + 30, // DART B: 3:30 PM ET close (its 2026-11-06 window, 10:30-15:30 ET)
   C: 15 * 60 + 0,
   C_LEGACY: 15 * 60 + 0,
   D: 15 * 60 + 0,
@@ -436,7 +480,7 @@ export const LOSS_LEVELS = [
 // This list must always be kept in step with shared/systemHalt.ts on the Base44
 // side — the engine holds its own copy so a tick never depends on a network read.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = ["B"];
+export const HALTED_SYSTEMS = []; // DART B reactivated 2026-11-19 with its 2026-11-06 rules
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 

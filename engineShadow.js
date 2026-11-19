@@ -145,6 +145,10 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   // confirming print and never a missed stop.
   const hlsKey = `${ref.system}:${ref.positionId}`;
   const hlsPending = hardStopPending.has(hlsKey);
+  // DART B's restored 2026-11-06 configuration closes on ONE qualifying print at its Hard
+  // Loss Stop (2026-11-19): B needs no second print, exactly as before 2026-11-13. Every
+  // other account keeps the two-print rule unchanged.
+  const singlePrintStop = String(ref.system ?? "").trim().toUpperCase() === "B";
 
   const started = process.hrtime.bigint();
   let verdict = null;
@@ -157,7 +161,7 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
       candles: series && series.length ? series : undefined,
       pressSizeUsd: sizing ? sizing.pressSizeUsd : undefined,
       pressBudgetFree: sizing ? sizing.free : undefined,
-      hardStopConfirm: { pending: hlsPending },
+      hardStopConfirm: singlePrintStop ? undefined : { pending: hlsPending },
     });
   } catch (err) {
     state.errors += 1;
@@ -172,7 +176,7 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
   // The Hard Loss Stop's own bookkeeping: armed by one print, fired by the next. A tick that
   // is no longer through the level disarms it, so a single bad print can never leave a live
   // trigger waiting to be completed by an unrelated price hours later.
-  if (verdict) {
+  if (verdict && !singlePrintStop) {
     if (verdict.action === "pending_confirm") {
       if (!hlsPending) {
         console.log(
