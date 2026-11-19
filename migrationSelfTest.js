@@ -102,20 +102,20 @@ function pos(over) {
 }
 
 // --- 3. the session close, on each account's own minute -----------------------
-// From the 2026-11-18 session A, B, C and D all close at 15:30 ET and record
-// close_1530 (the owner's trading-hours change); SESSION_CLOSE_MINUTE stays the shared
+// From the 2026-11-19 session A, B, C and D all close at 15:00 ET and record
+// close_1500 (the owner's trading-hours change); SESSION_CLOSE_MINUTE stays the shared
 // 16:00 fallback for an account with no row of its own.
-check("close: every account's session end is 15:30 ET", [systemCloseMinute("B"), systemCloseMinute("C"), systemCloseMinute("ANEW"), systemCloseMinute("D")], [930, 930, 930, 930]);
+check("close: every account's session end is 15:00 ET", [systemCloseMinute("B"), systemCloseMinute("C"), systemCloseMinute("ANEW"), systemCloseMinute("D")], [900, 900, 900, 900]);
 check("close: 2026-10-29 19:30Z is 15:30 EDT", etMinuteOfDay("2026-10-29T19:30:00Z"), 930);
 {
   const atMark = decideTick({
-    system: "B", position: pos({}), price: 51, nowIso: "2026-10-29T19:30:00Z", vectorScore: 5,
+    system: "B", position: pos({}), price: 51, nowIso: "2026-10-29T19:00:00Z", vectorScore: 5,
   });
-  check("close: an open position closes at 15:30 ET", atMark.exit_reason, "close_1530");
+  check("close: an open position closes at 15:00 ET", atMark.exit_reason, "close_1500");
   const before = decideTick({
-    system: "B", position: pos({}), price: 51, nowIso: "2026-10-29T19:29:00Z", vectorScore: 5,
+    system: "B", position: pos({}), price: 51, nowIso: "2026-10-29T18:59:00Z", vectorScore: 5,
   });
-  check("close: not before 15:30 ET", before.action !== "exit", true);
+  check("close: not before 15:00 ET", before.action !== "exit", true);
 }
 
 // --- 4. the press ladder ------------------------------------------------------
