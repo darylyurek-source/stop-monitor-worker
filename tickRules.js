@@ -343,20 +343,20 @@ export function trailGivebackFor(system) {
 }
 
 // ---------------------------------------------------------------------------
-// The session end, per account. FROM THE 2026-11-18 SESSION EVERY ACCOUNT CLOSES AT
-// 15:30 ET (the owner's trading-hours change): A, B, C and D each hold a row here, so
-// nothing new is opened at or after 15:30 and everything still open is closed then,
-// recorded as close_1530. Before this the four sat at the shared 16:00, except C and D
+// The session end, per account. FROM THE 2026-11-19 SESSION EVERY ACCOUNT CLOSES AT
+// 15:00 ET (the owner's trading-hours change): A, B, C and D each hold a row here, so
+// nothing new is opened at or after 15:00 and everything still open is closed then,
+// recorded as close_1500. Before this the four sat at the shared 16:00, except C and D
 // which closed at 13:30; the minute is a table entry, so the change lives here and
 // nowhere else. decideTick and the close sweep both read this one table, so a tick and
 // the clock can never part company on it.
 // ---------------------------------------------------------------------------
 export const SYSTEM_CLOSE_MINUTE = {
-  ANEW: 15 * 60 + 30,
-  B: 15 * 60 + 30,
-  C: 15 * 60 + 30,
-  C_LEGACY: 15 * 60 + 30,
-  D: 15 * 60 + 30,
+  ANEW: 15 * 60 + 0,
+  B: 15 * 60 + 0,
+  C: 15 * 60 + 0,
+  C_LEGACY: 15 * 60 + 0,
+  D: 15 * 60 + 0,
 };
 
 // TODAY ONLY — 2026-11-16 (owner authorized for this session alone). DART C and DART D
@@ -386,8 +386,8 @@ export function systemCloseMinute(system, shared = 16 * 60, nowMs = null) {
   return Number(v);
 }
 
-// The exit reason a scheduled close records: the minute decides it, so a 15:30 close is
-// close_1530 and the record and the Exit Scorecard say 3:30, never 4:00.
+// The exit reason a scheduled close records: the minute decides it, so a 15:00 close is
+// close_1500 and the record and the Exit Scorecard say 3:00, never 4:00.
 export function closeReasonFor(system, shared = 16 * 60, nowMs = null) {
   const m = systemCloseMinute(system, shared, nowMs);
   if (m === shared) return "close_1600";
@@ -462,7 +462,7 @@ export function isSystemHalted(system) {
 //   Protective Stop              PROTECTIVE_BY_SYSTEM      B's 55/65 -> C's 101/101 (off)
 //   trailing stop                TRAIL_GIVEBACK_BY_SYSTEM  price trail -> C's $100 giveback
 //   Vector Exit                  VECTOR_EXIT_BY_SYSTEM     65 -> C's 101 (off)
-//   session close                SYSTEM_CLOSE_MINUTE       16:00 -> C's 15:30, close_1530
+//   session close                SYSTEM_CLOSE_MINUTE       16:00 -> C's 15:00, close_1500
 //   presses                      CLONE_PRESS1 / PRESS_PLAN - already identical to C's:
 //                                +$200, then +$400, then +$1,100, $40,000 each
 // ---------------------------------------------------------------------------

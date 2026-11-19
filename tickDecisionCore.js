@@ -423,8 +423,8 @@ export function decideTick(args) {
     };
   }
 
-  // Rule 2b — the session end, on the account's own clock. From the 2026-11-18 session
-  // A, B, C and D all close at 15:30 and their records say close_1530 (the owner's
+  // Rule 2b — the session end, on the account's own clock. From the 2026-11-19 session
+  // A, B, C and D all close at 15:00 and their records say close_1500 (the owner's
   // trading-hours change); the shared 16:00 stays as the fallback for any account
   // without its own row. Checked after the stops so a genuine stop at the mark keeps
   // its own reason, exactly as the live manager's close does.
