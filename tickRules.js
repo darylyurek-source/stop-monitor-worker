@@ -436,7 +436,7 @@ export const LOSS_LEVELS = [
 // This list must always be kept in step with shared/systemHalt.ts on the Base44
 // side — the engine holds its own copy so a tick never depends on a network read.
 // ---------------------------------------------------------------------------
-export const HALTED_SYSTEMS = [];
+export const HALTED_SYSTEMS = ["B"];
 
 const HALTED = new Set(HALTED_SYSTEMS.map((s) => String(s).trim().toUpperCase()));
 
