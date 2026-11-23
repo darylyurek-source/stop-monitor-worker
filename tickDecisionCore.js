@@ -39,7 +39,7 @@
 //
 // Paper only. USD. No trading state is held between calls.
 
-import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, bProfitTrailPct, press1Threshold, press2Threshold, press3Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor } from "./tickRules.js";
+import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, bProfitTrailPct, press1Threshold, press2Threshold, press3Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor, priceTrailDisabledFor, vectorExitFullyDisabled } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
 // --- the 16:00 ET session end ------------------------------------------------
@@ -329,10 +329,17 @@ export function decideTick(args) {
   // reaches +$1,500, then 1.00% / 0.75% / 0.50% / 0.35% at +$1,500 / +$2,000 / +$2,500 /
   // +$3,500. Every other price-trail account keeps the shared cProfitTrailPct ladder.
   const isB = String(ruleKey).toUpperCase() === "B";
-  const tierPct = isC ? null : (isB ? bProfitTrailPct(peakForTrail) : cProfitTrailPct(peakForTrail));
+  // DART B (2026-11-23, the owner's confirmed rule 4): B HAS NO TRAIL OF ANY KIND. The check
+  // is a ROW (tickRules.NO_PRICE_TRAIL_SYSTEMS), so the removal holds for a position already
+  // armed under the old rules as well as a new one: it reports inactive, so every comparison
+  // below sees no trail and a position that used to trail can no longer breach.
+  const trailOff = priceTrailDisabledFor(ruleKey);
+  const tierPct = isC || trailOff ? null : (isB ? bProfitTrailPct(peakForTrail) : cProfitTrailPct(peakForTrail));
   let pt = isC
     ? { active: !!pos.price_trail_active, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
-    : assessPriceTrail(pos, price, tierPct);
+    : trailOff
+      ? { active: false, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
+      : assessPriceTrail(pos, price, tierPct);
   if (isC && pt.active) {
     const floor = r2(peakForTrail - trailGiveback);
     pt = { ...pt, breach: pl <= floor, protectedLevel: floor };
@@ -344,9 +351,11 @@ export function decideTick(args) {
   // with or without a press (2026-11-15, the owner's rule 7), and DART A's is the same
   // from 2026-11-18 (STEP 1 part 2: A trades C's exit set). The write happens on this
   // tick, before any stop is evaluated, and can never itself breach.
-  const trailArmsNow = isC
-    ? (!pt.active && peakForTrail >= C_TRAIL_ARM_PL)
-    : (!pt.active && pos.pressed_2r);
+  const trailArmsNow = trailOff
+    ? false
+    : isC
+      ? (!pt.active && peakForTrail >= C_TRAIL_ARM_PL)
+      : (!pt.active && pos.pressed_2r);
   if (trailArmsNow) {
     priorPatches.push(isC
       ? { price_trail_active: true, price_trail_activated_time: nowIso }
@@ -476,7 +485,9 @@ export function decideTick(args) {
   }
 
   // Rule 6 — downside Vector 65 across newly crossed loss checkpoints.
-  if (pl < 0) {
+  // DART B skips this block outright (2026-11-23, the owner's confirmed rule 1): its Vector
+  // Exit is removed, so no checkpoint is read, no bar is fetched and no score can close it.
+  if (!vectorExitFullyDisabled(ruleKey) && pl < 0) {
     const checked = new Set((pos.checked_loss_levels || []).map(Number));
     const newLevels = LOSS_LEVELS.filter((L) => !checked.has(L) && pl <= L);
     if (newLevels.length > 0) {
@@ -551,8 +562,13 @@ export function decideTick(args) {
   }
 
   // Rule 7 — upside Vector grid (stateful ±$100 from +$900).
+  // DART B removes the grid as a MECHANISM (2026-11-23, the owner's confirmed rule 1): a
+  // position carrying old grid state must not re-enter it either, or every tick at or above
+  // +$900 would write grid state and return before the press ladder.
   let upsideLevel = null;
-  if (pos.profit_grid_active) {
+  if (vectorExitFullyDisabled(ruleKey)) {
+    upsideLevel = null;
+  } else if (pos.profit_grid_active) {
     const nextUp = Number(pos.next_up_profit_level);
     const nextDown = Number(pos.next_down_profit_level);
     if (pl >= nextUp || pl <= nextDown) {
@@ -697,7 +713,7 @@ export function decideTick(args) {
     // A press never arms C's trail: C's trail is its own +$500 peak-P&L rule.
     // A press arms the share-price trail on a percentage-trail account. DART C, and DART A
     // from 2026-11-18, have no press-driven trail at all: theirs arms at +$500 of P&L.
-    const activatesTrail = ruleKey !== "C_LEGACY" && ruleKey !== "ANEW" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
+    const activatesTrail = !trailOff && ruleKey !== "C_LEGACY" && ruleKey !== "ANEW" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
     const pressEntry = {
       timestamp: nowIso,
       level: pressLevel,

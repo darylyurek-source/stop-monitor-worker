@@ -87,7 +87,7 @@ export function press1Threshold(system) {
 // 2026-11-19 (the owner's direction): Press 2 is +$700 and Press 3 +$800, its Press 1 is
 // +$250 (CLONE_PRESS1.B below), all three at $40,000 and in order as before. A, C and D
 // keep +$400 and +$1,100 untouched. Nothing else about a press moves.
-export const B_PRESS2 = 700;
+export const B_PRESS2 = 500;
 export const B_PRESS3 = 800;
 
 function ruleIsB(system) {
@@ -195,7 +195,7 @@ export function ruleKeyFor(system, position) {
 // DART B's row is -$1,700 again (its 2026-11-06 configuration, restored 2026-11-19) and it
 // closes on ONE qualifying print, as it did then. A, C and D keep their own rows and the
 // two-print rule untouched.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1700, C: -400, C_LEGACY: -400, D: -400 };
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -214,8 +214,9 @@ export function systemStop(system) {
 // per position at +$1,850, exactly as B does. E was removed from the engine on
 // 2026-11-10, so it has no row here.
 export const SYSTEM_PARTIAL_PROFIT = {
-  // DART B has NO row again (restored 2026-11-19 to its 2026-11-06 configuration): it
-  // never sells a position partially — every position is held to its own exits.
+  // DART B (2026-11-23, the owner's confirmed rule 3): B DOES sell — 25% of the shares
+  // held, once, the first time total unrealized P&L reaches +$1,400, whole shares.
+  B: { threshold: 1400, fraction: 0.25 },
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
   D: { threshold: 850, fraction: 0.25 }, // DART D (2026-11-16): C's rule set — 25% once at +$850
   // DART C (set 2026-11-11, after that day's close): C runs B's rules EXACTLY from
@@ -236,8 +237,9 @@ export const SYSTEM_PARTIAL_PROFIT = {
 // below holds ($350 for A, B and C, $700 for D from 2026-11-11). Below +$2,000 the
 // Vector test is unchanged, so a position can still arm earlier on deterioration.
 export const AUTO_ARM_PL_BY_SYSTEM = {
-  // DART B has NO row again (restored 2026-11-19): no automatic hard stop — its $350
-  // Protective Stop arms on the Vector test alone, exactly as on 2026-11-06.
+  // DART B (2026-11-23, the owner's confirmed rule 4): B's $350 profit giveback arms by
+  // itself at +$900 — its ONLY arming level, now that its Vector arming is removed.
+  B: 900,
   ANEW: 2000,
   D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
@@ -269,6 +271,10 @@ export function partialProfitPolicy(system) {
 // protectivePolicy() does in Base44.
 // ---------------------------------------------------------------------------
 export const B_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 350 };
+// DART B (2026-11-23, the owner's confirmed rule 4): THE VECTOR ARMING IS REMOVED FROM B.
+// Unreachable thresholds (a Vector runs 0-100) leave the row its only other job — the $350
+// the stop gives back once it arms by itself at +$900 (AUTO_ARM_PL_BY_SYSTEM.B).
+export const B_LIVE_RULE_SET = { stockThreshold: 101, marketThreshold: 101, buffer: 350 };
 export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350 };
 
 // DART D's own row (2026-11-11): B's 55/65 arming with D's stops at double size —
@@ -306,7 +312,7 @@ const C_LEGACY_RULE_SET = {
 
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
-  B: B_RULE_SET,
+  B: B_LIVE_RULE_SET,
   // DART C — its own 45/85, permanently (the cutover to A's 55/65 was cancelled).
   // The "C" alias carries the same numbers as C_LEGACY, so no caller can land on a
   // different C rule set.
@@ -458,12 +464,27 @@ export const C_LEGACY_VECTOR_EXIT = 101;
 // the rule: the harness mutates this table in its own process, never in the worker.
 // DART D (2026-11-16): D HAS NO VECTOR EXIT — 101 is unreachable, which removes both the
 // loss checkpoints and the +$900 upside grid for D without touching A's, B's or C's exit.
-export const VECTOR_EXIT_BY_SYSTEM = { C: C_VECTOR_EXIT, C_LEGACY: C_LEGACY_VECTOR_EXIT, D: 101 };
+export const VECTOR_EXIT_BY_SYSTEM = { B: 101, C: C_VECTOR_EXIT, C_LEGACY: C_LEGACY_VECTOR_EXIT, D: 101 };
 
 // The Vector Exit threshold a system closes at: its own row, else the shared 65.
 export function vectorExitThreshold(system) {
   const v = VECTOR_EXIT_BY_SYSTEM[String(system ?? "").trim().toUpperCase()];
   return Number.isFinite(Number(v)) ? Number(v) : VECTOR_THRESHOLD;
+}
+
+// DART B (2026-11-23, the owner's confirmed rules 1 and 4): B's Vector Exit and its trail are
+// removed as MECHANISMS, not merely made unreachable. A threshold of 101 could never close a
+// position, but the downside checkpoints and the +$900 upside grid would still read bars,
+// write grid state and return before the press ladder, and a position already armed under the
+// old trail could still breach. Both checks are ROWS, so the removal holds for a position
+// opened before this change as well as after it.
+export const NO_PRICE_TRAIL_SYSTEMS = ["B"];
+export function priceTrailDisabledFor(system) {
+  return NO_PRICE_TRAIL_SYSTEMS.includes(String(system ?? "").trim().toUpperCase());
+}
+export const VECTOR_EXIT_DISABLED_SYSTEMS = ["B"];
+export function vectorExitFullyDisabled(system) {
+  return VECTOR_EXIT_DISABLED_SYSTEMS.includes(String(system ?? "").trim().toUpperCase());
 }
 
 export const LOSS_LEVELS = [
