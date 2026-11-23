@@ -139,13 +139,13 @@ check("A still closes at 15:00 ET as close_1500",
 
 
 // --- OFFICIAL EARLY CLOSES (1:00 PM ET) ---------------------------------------
-const atEarly = (system, iso) => decideTick({ system, position: pos(), price: 101, nowIso: iso });
+const atEarly = (system, iso, price = 101) => decideTick({ system, position: pos(), price, nowIso: iso });
 for (const iso of ["2026-11-27T18:01:00.000Z", "2026-12-24T18:01:00.000Z"]) {
   check("all four close at 13:00 ET on " + iso.slice(0, 10) + " (early close)",
     ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso).event),
     ["close_1300", "close_1300", "close_1300", "close_1300"]);
   check("all four hold at 12:59 ET on " + iso.slice(0, 10),
-    ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso.replace("T18:01", "T17:59")).action),
+    ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso.replace("T18:01", "T17:59"), 100.1).action),
     ["hold", "hold", "hold", "hold"]);
 }
 check("a normal day is unchanged: A/C/D 15:00, B 15:30",
