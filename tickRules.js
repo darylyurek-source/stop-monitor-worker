@@ -418,6 +418,11 @@ export const SYSTEM_CLOSE_MINUTE = {
 // be reverted, switched off or remembered.
 export const FULL_SESSION_CLOSE_DATES = { C: ["2026-11-16"], C_LEGACY: ["2026-11-16"], D: ["2026-11-16"] };
 
+// OFFICIAL NYSE EARLY CLOSES (1:00 PM ET). On these dates EVERY system closes at 13:00,
+// whatever its own row says, so no account can carry a position past the exchange's close.
+// Dates are added as the exchange publishes them.
+export const EARLY_CLOSE_MINUTES = { "2026-11-27": 13 * 60, "2026-12-24": 13 * 60 };
+
 // The ET calendar date of an instant, so the exception is keyed on the exchange's own day
 // and never on the server's timezone.
 function etDateOf(ms) {
@@ -433,6 +438,10 @@ export function systemCloseMinute(system, shared = 16 * 60, nowMs = null) {
   const v = SYSTEM_CLOSE_MINUTE[key];
   if (!Number.isFinite(Number(v))) return shared;
   if (nowMs != null && (FULL_SESSION_CLOSE_DATES[key] || []).includes(etDateOf(nowMs))) return shared;
+  if (nowMs != null) {
+    const early = EARLY_CLOSE_MINUTES[etDateOf(nowMs)];
+    if (Number.isFinite(Number(early))) return Math.min(Number(v), Number(early));
+  }
   return Number(v);
 }
 

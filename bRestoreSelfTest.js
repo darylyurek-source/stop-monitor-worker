@@ -137,6 +137,23 @@ check("B closes at 15:30 ET as close_1530",
 check("A still closes at 15:00 ET as close_1500",
   decideTick({ system: "ANEW", position: pos(), price: 101, nowIso: "2026-11-19T20:01:00.000Z" }).event, "close_1500");
 
+
+// --- OFFICIAL EARLY CLOSES (1:00 PM ET) ---------------------------------------
+const atEarly = (system, iso) => decideTick({ system, position: pos(), price: 101, nowIso: iso });
+for (const iso of ["2026-11-27T18:01:00.000Z", "2026-12-24T18:01:00.000Z"]) {
+  check("all four close at 13:00 ET on " + iso.slice(0, 10) + " (early close)",
+    ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso).event),
+    ["close_1300", "close_1300", "close_1300", "close_1300"]);
+  check("all four hold at 12:59 ET on " + iso.slice(0, 10),
+    ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso.replace("T18:01", "T17:59")).action),
+    ["hold", "hold", "hold", "hold"]);
+}
+check("a normal day is unchanged: A/C/D 15:00, B 15:30",
+  [atEarly("ANEW", "2026-11-24T20:01:00.000Z").event, atEarly("B", "2026-11-24T20:01:00.000Z").action,
+   atEarly("B", "2026-11-24T20:31:00.000Z").event, atEarly("C", "2026-11-24T20:01:00.000Z").event,
+   atEarly("D", "2026-11-24T20:01:00.000Z").event],
+  ["close_1500", "hold", "close_1530", "close_1500", "close_1500"]);
+
 // --- REPORT -------------------------------------------------------------------
 let failed = 0;
 for (const c of cases) {
