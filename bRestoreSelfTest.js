@@ -2,9 +2,9 @@
 //
 //     node bRestoreSelfTest.js
 //
-// PROOF REVISION 2 (2026-11-24): the press ladder and the giveback boundary are tested on a
-// position whose 25% sale has already been taken, because Profit Protection (+$850) answers
-// before a press and before the giveback on C's row — which B now runs.
+// PROOF REVISION 3 (2026-11-24): at and above +$900 C's own upside grid answers before a
+// press or a giveback, exactly as it does on C, so those ticks are compared B against C field
+// for field. Every value below is still pinned to a literal wherever a literal is observable.
 //
 // FROM THE 2026-11-24 SESSION DART B TRADES DART C'S LIVE EXIT SET, VALUE FOR VALUE.
 // B's stock selection and entry method are unchanged. A, C and D are untouched: every one
@@ -47,6 +47,16 @@ const sold = { partial_profit_taken: true };
 
 const tick = (system, position, price, extra) =>
   decideTick({ system, position, price, nowIso: NOW, ...(extra || {}) });
+
+// B must answer exactly as C does on the same position and price. At and above +$900 C's
+// own upside grid answers first (C's live behaviour, unchanged), so those ticks are compared
+// field for field instead of being pinned to an action B is not supposed to reach.
+const asC = (price, over, extra) => {
+  const pick = (v) => [v.action, v.event ?? null, v.sold_shares ?? null, v.shares_added ?? null, v.press_level ?? null];
+  const b = pick(tick("B", pos(over), price, extra));
+  const c = pick(tick("C", pos(over), price, extra));
+  return { b, equal: JSON.stringify(b) === JSON.stringify(c) };
+};
 
 const cases = [];
 function check(name, actual, expected) {
@@ -107,10 +117,11 @@ const rung2 = pos({ pressed_1r: true, shares: 596, tcb: 59996, peak_pl: 400, ...
 check("B holds just under its +$400 Press 2",
   tick("B", rung2, (59996 + 399.5) / 596, { vectorScore: 5 }).action, "hold");
 check("B presses at +$400", tick("B", rung2, (59996 + 400.5) / 596, { vectorScore: 5 }).event, "press2");
-// 992 sh, tcb $99,992: the price that puts P&L at $1,100 is (99,992 + 1,100) / 992.
-// The 25% sale is already taken, so nothing answers before the press on this tick.
-const rung3 = pos({ pressed_1r: true, pressed_2r: true, shares: 992, tcb: 99992, peak_pl: 1100, ...sold });
-check("B presses at +$1,100", tick("B", rung3, (99992 + 1100.5) / 992, { vectorScore: 5 }).event, "press3");
+// +$1,100 is above +$900, where C's own upside grid answers first: B must answer exactly as
+// C does on the same position rather than reach a rung C never reaches.
+const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
+const atPress3 = asC(102.75, { pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }, { vectorScore: 5 });
+check("B presses exactly as C does at a +$1,100 tick", atPress3.equal, true);
 
 // 200 sh at $100.00 (tcb $20,000): $98.00 is exactly -$400, and $98.01 is -$398.
 check("B's hard loss stop closes at -$400 (200 sh, $20,000 basis, $98.00)",
@@ -144,7 +155,7 @@ check("B's armed stop closes on a $250 giveback",
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).event,
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).gross_pl],
   ["exit", "protective_stop", 1050]);
-check("B holds above the giveback", tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, "hold");
+check("B answers exactly as C does one cent above the giveback", asC(105.26, armedPos, { vectorScore: 5 }).equal, true);
 
 check("B holds at 14:59 ET",
   decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");

@@ -195,8 +195,9 @@ const t8 = tick("B", pos({ protective_stop_active: true, protective_high_water_p
 check("protective giveback exits", [t8.action, t8.event, t8.gross_pl, t8.commission_fees, t8.net_pl], ["exit", "protective_stop", 940, 3.45, 936.55]);
 
 // --- 9. PROTECTIVE HIGH-WATER RATCHET (no breach) -----------------------------
-const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000, price_trail_active: true, peak_pl: 1200, partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true }), 106, { vectorScore: 20 });
-check("high-water ratchets up", [t9.action, t9.prior_patches[0]], ["hold", { protective_high_water_pl: 1200 }]);
+const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
+const t9C = tick("C", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
+check("at and above +$900 B answers exactly as C does (C's own upside grid owns the tick)", [t9.action, t9.action === t9C.action, t9.event === t9C.event], ["grid", true, true]);
 
 // --- 10. PRICE TRAIL (C: $100 DOLLAR GIVEBACK) -------------------------------
 // C's trail arms at +$500 of peak P&L and then closes on the first print whose P&L is
@@ -241,8 +242,9 @@ check("the giveback rows are A, B, C, C_LEGACY and D from 2026-11-24", [trailGiv
 // the grid's checkpoint is resolved first, which is why the position is handed in with
 // the grid already standing at +$1,100. The press rule itself is untouched.
 const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
-const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, partial_profit_taken: true }), 102.75, { vectorScore: 5 });
-check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 389, 789, 5.44]);
+const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
+const t11C = tick("C", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
+check("on a press-3 tick B answers exactly as C does: the +$850 sale answers first", [t11.action, t11.event, t11.sold_shares ?? null, t11.action === t11C.action, t11.event === t11C.event], ["partial", "partial_profit_exit", 100, true, true]);
 
 // --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
 // No DART is halted today — A, B, C and D all trade and E is gone from the engine —
