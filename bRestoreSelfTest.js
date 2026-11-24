@@ -18,7 +18,7 @@
 //     Trail          C's $100 P&L giveback, armed at +$500 of position P&L
 //     Vector Exit    threshold 101, blocks running exactly as C's
 //     Hard Loss      -$400 on its own row (C moved to -$1,150 on 2026-11-24)
-//     Session        15:00 ET, recorded as close_1500
+//     Session        15:30 ET, recorded as close_1530
 //
 // No network, no database, no clock, no trading record. Exit code 0 = every case passes.
 
@@ -95,10 +95,10 @@ check("B's Vector Exit is C's: threshold 101, blocks running",
   [vectorExitThreshold("C"), vectorExitFullyDisabled("C")]);
 check("B's Vector Exit values are 101 and not disabled",
   [vectorExitThreshold("B"), vectorExitFullyDisabled("B")], [101, false]);
-check("B closes at 15:00 ET as close_1500, exactly as C does",
+check("B closes at 15:30 ET as close_1530, exactly as C does",
   [systemCloseMinute("B"), closeReasonFor("B"), systemCloseMinute("C"), closeReasonFor("C")],
-  [900, "close_1500", 900, "close_1500"]);
-check("A and D close at 15:00 too", [systemCloseMinute("ANEW"), systemCloseMinute("D")], [900, 900]);
+  [930, "close_1530", 930, "close_1530"]);
+check("A and D close at 15:30 too", [systemCloseMinute("ANEW"), systemCloseMinute("D")], [930, 930]);
 check("B is not halted", HALTED_SYSTEMS.includes("B"), false);
 
 // --- B'S DECISIONS ------------------------------------------------------------
@@ -160,10 +160,10 @@ check("B's armed stop closes on a $250 giveback",
   ["exit", "protective_stop", 1050]);
 check("one cent above B's giveback neither account closes: both hold, each re-basing its own grid", [tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, tick("C", pos(armedPos), 105.26, { vectorScore: 5 }).action], ["grid", "grid"]);
 
-check("B holds at 14:59 ET",
-  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");
-check("B closes at 15:00 ET as close_1500",
-  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T20:00:00.000Z" }).event, "close_1500");
+check("B holds at 15:29 ET",
+  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T20:29:00.000Z" }).action, "hold");
+check("B closes at 15:30 ET as close_1530",
+  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T20:30:00.000Z" }).event, "close_1530");
 
 // --- OFFICIAL EARLY CLOSES (1:00 PM ET) ---------------------------------------
 const atEarly = (system, iso, price = 101) => decideTick({ system, position: pos({ ...allPressed, ...sold }), price, nowIso: iso });
