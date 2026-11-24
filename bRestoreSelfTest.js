@@ -79,9 +79,9 @@ check("B sells 25% once at +$850, as C does",
   [partialProfitPolicy("B"), partialProfitPolicy("C")],
   [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }]);
 check("B arms by itself at +$1,000, as C does", [autoArmPolicy("B"), autoArmPolicy("C")], [1000, 1000]);
-check("B's protective row IS C_LEGACY's: 101 / 101 with a $250 giveback",
-  [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer],
-  [protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("C_LEGACY").buffer]);
+check("B's protective row is its OWN 101 / 101 / $250, never C's new $400",
+  [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C_LEGACY").buffer],
+  [101, 101, 250, 400]);
 check("B's protective row is 101 / 101 / 250",
   [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer],
   [101, 101, 250]);

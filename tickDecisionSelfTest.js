@@ -58,7 +58,7 @@ check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entr
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A, B, C and D all carry 101/101, so no Vector can arm any of them (B adopted C's exit set 2026-11-24)", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 101, 101, 250, 101, 101, 250, 101, 101, 250]);
+check("protective policy: A, B, C and D all carry 101/101, so no Vector can arm any of them; A and B keep $250, C and C_LEGACY carry C's new $400 (2026-11-25)", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 101, 101, 250, 101, 101, 400, 101, 101, 250]);
 check("D runs A's rule set (no Protective Stop) and D's own press is +$200", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 200, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
@@ -308,7 +308,7 @@ check(
   [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
   [101, 101, 101, 101, 101, 101, 101, 101]
 );
-check("giveback after the automatic arm: A, B, C and D all $250", [protectivePolicy("ANEW").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 250, 250, 250]);
+check("giveback after the automatic arm: A, B and D $250, C and C_LEGACY $400", [protectivePolicy("ANEW").buffer, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 400, 400, 250, 250]);
 
 // --- 18b. D IS A'S RULE SET, PRESS ASIDE (2026-11-18, the owner's STEP 6) ------
 // Every exit row D resolves must equal A's, row for row: the hard stop, the Protective

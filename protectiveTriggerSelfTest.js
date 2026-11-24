@@ -135,14 +135,14 @@ const shortMarket = assess("C", pos({ side: "short" }), { stockScore: 0, candles
 check("a rising market arms a short via the market leg", [shortMarket.action, shortMarket.triggered_by], ["activate", "market"]);
 
 // --- 8. END TO END WITH THE TICK ENGINE -------------------------------------
-// Armed high-water $940, buffer $350 -> protected level $590. Long 200 sh at 100:
-// a price of 102.95 gives P&L of exactly $590, which breaches (P&L <= protected).
+// Armed high-water $940, C's $400 buffer (2026-11-25) -> protected level $540. Long 200 sh at 100:
+// a price of 102.70 gives P&L of exactly $540, which breaches (P&L <= protected).
 const armedPos = pos({ protective_stop_active: true, protective_high_water_pl: 940 });
-const breached = decideTick({ system: "C", position: armedPos, price: 102.95, nowIso: NOW, halted: false });
-check("the engine exits on the armed high-water", [breached.action, breached.event, breached.gross_pl], ["exit", "protective_stop", 590]);
+const breached = decideTick({ system: "C", position: armedPos, price: 102.70, nowIso: NOW, halted: false });
+check("the engine exits on the armed high-water", [breached.action, breached.event, breached.gross_pl], ["exit", "protective_stop", 540]);
 
 // One cent higher and the same position is held: the buffer is a buffer, not a hair.
-const held = decideTick({ system: "C", position: armedPos, price: 102.96, nowIso: NOW, halted: false });
+const held = decideTick({ system: "C", position: armedPos, price: 102.71, nowIso: NOW, halted: false });
 check("one cent above the protected level holds", held.action !== "exit", true);
 
 // --- REPORT ------------------------------------------------------------------

@@ -271,9 +271,9 @@ export function partialProfitPolicy(system) {
 // protectivePolicy() does in Base44.
 // ---------------------------------------------------------------------------
 export const B_RULE_SET = { stockThreshold: 55, marketThreshold: 65, buffer: 350 };
-// DART B (2026-11-24): B HAS NO ROW OF ITS OWN ANY MORE. It resolves to C's live row
-// (PROTECTIVE_BY_SYSTEM.B === C_LEGACY_RULE_SET), so the 101/101 $350 row it held from
-// 2026-11-23 is deleted and no second definition of B can exist here.
+// DART B (2026-11-25): B resolves to its OWN 101/101 $250 row (STOP_250_RULE_SET below), never
+// to C's, so C's new $400 giveback can never reach B. From the 2026-11-24 session B pointed at
+// C's row; the numbers are identical, only the object B points at changes here.
 export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350 };
 
 // DART D's own row (2026-11-11): B's 55/65 arming with D's stops at double size —
@@ -300,23 +300,33 @@ export const C_MARKET_ARM = 101;
 export const C_LEGACY_STOCK_ARM = 101;
 export const C_LEGACY_MARKET_ARM = 101;
 
-// DART C's row now carries ONE job: the $250 the Automatic Hard Stop gives back from
-// its high-water P&L once it arms at +$1,000 (AUTO_ARM_PL_BY_SYSTEM.C). The arming
-// thresholds above can never be reached, so no Vector test can arm C.
-const C_LEGACY_RULE_SET = {
+// THE $250 ROW (2026-11-25, the owner's rule 10): its own object, so no account can inherit DART
+// C's new $400 giveback by pointing at C's row. DART A and DART B keep 101/101 and the $250 their
+// Automatic Hard Stop gives back once it arms at +$1,000.
+const STOP_250_RULE_SET = {
+  stockThreshold: 101,
+  marketThreshold: 101,
+  buffer: 250,
+};
+
+// DART C's OWN row (2026-11-25, the owner's rule 10): still 101/101 — no Vector score can arm a C
+// position — and its Automatic Hard Stop now gives back $400 instead of $250 from the high-water
+// P&L once it arms at +$1,000 (AUTO_ARM_PL_BY_SYSTEM.C). Everything else about C is unchanged,
+// and the adjustment after the 25% sale works exactly as before with this amount.
+const C_LIVE_RULE_SET = {
   stockThreshold: C_LEGACY_STOCK_ARM,
   marketThreshold: C_LEGACY_MARKET_ARM,
-  buffer: 250,
+  buffer: 400,
 };
 
 export const PROTECTIVE_BY_SYSTEM = {
   ANEW: B_RULE_SET,
-  B: C_LEGACY_RULE_SET,
+  B: STOP_250_RULE_SET,
   // DART C — its own 45/85, permanently (the cutover to A's 55/65 was cancelled).
   // The "C" alias carries the same numbers as C_LEGACY, so no caller can land on a
   // different C rule set.
-  C: C_LEGACY_RULE_SET,
-  C_LEGACY: C_LEGACY_RULE_SET,
+  C: C_LIVE_RULE_SET,
+  C_LEGACY: C_LIVE_RULE_SET,
   // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
   // doubled on D's own account; B, C and A keep $350).
   D: D_RULE_SET,
@@ -546,7 +556,9 @@ export function isSystemHalted(system) {
 SYSTEM_HARD_STOP.ANEW = SYSTEM_HARD_STOP.C_LEGACY;
 SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;
 AUTO_ARM_PL_BY_SYSTEM.ANEW = AUTO_ARM_PL_BY_SYSTEM.C;
-PROTECTIVE_BY_SYSTEM.ANEW = PROTECTIVE_BY_SYSTEM.C_LEGACY;
+// DART A (2026-11-25): A keeps its 101/101 $250 row as its own object, never C's, so C's new
+// $400 giveback cannot reach A either. A's values are unchanged.
+PROTECTIVE_BY_SYSTEM.ANEW = STOP_250_RULE_SET;
 // DART A KEEPS ITS $100 TRAIL (owner, 2026-11-24): A's row was a copy of C's, so removing
 // C's would have taken A's with it. A's trail is now its own value and no other A row moves.
 TRAIL_GIVEBACK_BY_SYSTEM.ANEW = 100;
