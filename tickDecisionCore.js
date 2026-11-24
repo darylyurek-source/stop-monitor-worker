@@ -379,7 +379,7 @@ export function decideTick(args) {
   // DART D arms here too from 2026-11-18 (the owner's STEP 6): D is A's rule set with the
   // press as its only difference, so its arming resolves in every caller A's does, from D's
   // own +$1,000 row. B keeps its own +$2,000 row in engineShadow, unchanged.
-  if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW" || ruleKey === "D") && !protectiveActive) {
+  if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW" || ruleKey === "D" || ruleKey === "B") && !protectiveActive) {
     const cArm = autoArmPolicy(sys);
     if (Number.isFinite(cArm) && pl >= cArm) {
       priorPatches.push({
@@ -713,7 +713,7 @@ export function decideTick(args) {
     // A press never arms C's trail: C's trail is its own +$500 peak-P&L rule.
     // A press arms the share-price trail on a percentage-trail account. DART C, and DART A
     // from 2026-11-18, have no press-driven trail at all: theirs arms at +$500 of P&L.
-    const activatesTrail = !trailOff && ruleKey !== "C_LEGACY" && ruleKey !== "ANEW" && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
+    const activatesTrail = !trailOff && !isC && (isPress2 || (plan?.trailAtFirstPress === true && !isPress2 && !isPress3));
     const pressEntry = {
       timestamp: nowIso,
       level: pressLevel,
