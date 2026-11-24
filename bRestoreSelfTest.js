@@ -85,9 +85,9 @@ check("B's protective row IS C_LEGACY's: 101 / 101 with a $250 giveback",
 check("B's protective row is 101 / 101 / 250",
   [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer],
   [101, 101, 250]);
-check("B carries C's $100 trail, not a share-price trail",
-  [trailGivebackFor("B"), priceTrailDisabledFor("B")],
-  [trailGivebackFor("C"), priceTrailDisabledFor("C")]);
+check("B carries its own $100 trail; C has none from 2026-11-24",
+  [trailGivebackFor("B"), priceTrailDisabledFor("B"), trailGivebackFor("C"), priceTrailDisabledFor("C")],
+  [100, false, null, true]);
 check("B's trail giveback is $100 and no price trail is disabled",
   [trailGivebackFor("B"), priceTrailDisabledFor("B")], [100, false]);
 check("B's Vector Exit is C's: threshold 101, blocks running",

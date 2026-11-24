@@ -383,7 +383,11 @@ export const C_TRAIL_GIVEBACK_USD = 100;
 // admissible print whose P&L is at or below the highest reached since arming minus $100.
 // One table, so neither account can drift from the other; A and B have no row and keep
 // the share-price percentage trail, unchanged.
-export const TRAIL_GIVEBACK_BY_SYSTEM = { B: 100, C: 100, C_LEGACY: 100, D: 100 };
+// DART C's $100 giveback trail was REMOVED (owner, 2026-11-24, in force from that session):
+// a C position resolves C_LEGACY, so BOTH keys are gone from this table and both are listed in
+// NO_PRICE_TRAIL_SYSTEMS below — C has no trail of any kind and does NOT fall back to the
+// share-price percentage trail. Everything else about C is unchanged. A, B and D keep theirs.
+export const TRAIL_GIVEBACK_BY_SYSTEM = { B: 100, D: 100 };
 
 // The giveback (USD) a system's trail enforces, or null when it has the price trail.
 export function trailGivebackFor(system) {
@@ -486,7 +490,7 @@ export function vectorExitThreshold(system) {
 // write grid state and return before the press ladder, and a position already armed under the
 // old trail could still breach. Both checks are ROWS, so the removal holds for a position
 // opened before this change as well as after it.
-export const NO_PRICE_TRAIL_SYSTEMS = [];
+export const NO_PRICE_TRAIL_SYSTEMS = ["C", "C_LEGACY"];
 export function priceTrailDisabledFor(system) {
   return NO_PRICE_TRAIL_SYSTEMS.includes(String(system ?? "").trim().toUpperCase());
 }
@@ -543,7 +547,9 @@ SYSTEM_HARD_STOP.ANEW = SYSTEM_HARD_STOP.C_LEGACY;
 SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;
 AUTO_ARM_PL_BY_SYSTEM.ANEW = AUTO_ARM_PL_BY_SYSTEM.C;
 PROTECTIVE_BY_SYSTEM.ANEW = PROTECTIVE_BY_SYSTEM.C_LEGACY;
-TRAIL_GIVEBACK_BY_SYSTEM.ANEW = TRAIL_GIVEBACK_BY_SYSTEM.C_LEGACY;
+// DART A KEEPS ITS $100 TRAIL (owner, 2026-11-24): A's row was a copy of C's, so removing
+// C's would have taken A's with it. A's trail is now its own value and no other A row moves.
+TRAIL_GIVEBACK_BY_SYSTEM.ANEW = 100;
 VECTOR_EXIT_BY_SYSTEM.ANEW = VECTOR_EXIT_BY_SYSTEM.C_LEGACY;
 SYSTEM_CLOSE_MINUTE.ANEW = SYSTEM_CLOSE_MINUTE.C_LEGACY;
 FULL_SESSION_CLOSE_DATES.ANEW = FULL_SESSION_CLOSE_DATES.C_LEGACY;

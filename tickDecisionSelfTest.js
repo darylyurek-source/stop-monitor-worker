@@ -199,25 +199,23 @@ const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_p
 const t9C = tick("C", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
 check("at and above +$900 B answers exactly as C does (C's own upside grid owns the tick)", [t9.action, t9.action === t9C.action, t9.event === t9C.event], ["grid", true, true]);
 
-// --- 10. PRICE TRAIL (C: $100 DOLLAR GIVEBACK) -------------------------------
-// C's trail arms at +$500 of peak P&L and then closes on the first print whose P&L is
-// at or below the highest P&L reached since arming minus $100. It measures P&L, never
-// share price, so no percentage and no price extreme is involved.
+// --- 10. PRICE TRAIL (C HAS NONE FROM 2026-11-24; A AND D KEEP THE $100) -------
+// DART C's $100 giveback trail was REMOVED (owner, in force from the 2026-11-24 session): C
+// resolves to C_LEGACY, both keys are gone from TRAIL_GIVEBACK_BY_SYSTEM and both are in
+// NO_PRICE_TRAIL_SYSTEMS, so a C position has no trail at all — it neither arms nor breaches,
+// and it never falls back to the share-price percentage trail.
+// Kept as the fixture the A case below uses.
 const cTrail = (over) => pos({ price_trail_active: true, peak_pl: 3000, pressed_1r: true, pressed_2r: true, pressed_3r: true, partial_profit_taken: true, ...(over || {}) });
-// Stored peak $3,000 -> floor $2,900. A price of $114.00 gives P&L $2,800: breach.
-const t10 = tick("C", cTrail(), 114, { halted: false });
-check("C's trail exits on the $100 giveback from its peak", [t10.action, t10.event, t10.stop_detail.trail_pct, t10.stop_detail.trail_protected], ["exit", "price_trail_stop", null, 2900]);
-check("C's giveback exit costs (fees at $114.00)", [t10.gross_pl, t10.commission_fees], [2800, 3.69]);
-// Same peak, P&L $2,960 — inside the giveback, so the position is held.
-const t10b = tick("C", cTrail(), 114.8, { halted: false });
-check("C holds inside the $100 giveback", [t10b.action !== "exit", t10b.exit_price ?? null], [true, null]);
-// A new high lifts the reference: peak $3,200 -> floor $3,100, so $3,150 is held.
-const t10c = tick("C", cTrail({ peak_pl: 3150 }), 115.75, { halted: false });
-check("a higher peak lifts the giveback floor", [t10c.action !== "exit", t10c.exit_price ?? null], [true, null]);
-// Arming: the trail starts at +$500 of peak P&L and writes no price extreme for C.
-const t10d = tick("C", pos({ peak_pl: 499 }), 102.49, { halted: false });
-const t10e = tick("C", pos({ peak_pl: 500 }), 102.5, { halted: false });
-check("C's trail arms exactly at +$500", [C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, t10d.prior_patches || [], (t10e.prior_patches || [])[0]], [500, 100, [], { price_trail_active: true, price_trail_activated_time: NOW }]);
+// The owner's case: +$600, then +$490. No trail exists, so both are a hold and nothing arms.
+const cNoTrail = (over) => pos({ pressed_1r: true, pressed_2r: true, pressed_3r: true, partial_profit_taken: true, ...(over || {}) });
+const t10 = tick("C", cNoTrail(), 103, { halted: false });
+const t10b = tick("C", cNoTrail({ peak_pl: 600 }), 102.45, { halted: false });
+check("C has no trail: +$600 then +$490 holds, and no trail is ever armed", [t10.action, (t10.prior_patches || []).some((p) => p && p.price_trail_active === true), t10b.action, t10b.event ?? null], ["hold", false, "hold", null]);
+check("C and C_LEGACY have no giveback row; A still has $100", [trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("ANEW")], [null, null, 100]);
+// Arming: +$500 of peak P&L starts nothing on C.
+const t10d = tick("C", cNoTrail({ peak_pl: 499 }), 102.49, { halted: false });
+const t10e = tick("C", cNoTrail({ peak_pl: 500 }), 102.5, { halted: false });
+check("C's trail no longer arms at +$500", [(t10d.prior_patches || []).some((p) => p && p.price_trail_active === true), (t10e.prior_patches || []).some((p) => p && p.price_trail_active === true)], [false, false]);
 
 // DART D (2026-11-16, the owner's rule 8): the identical $100 giveback trail, resolved
 // from D's own row. A and B have no row and keep the share-price percentage trail.
@@ -233,7 +231,7 @@ check("A's trail exits on C's $100 giveback from its peak", [aTrail.action, aTra
 const aArmLow = tick("ANEW", pos({ peak_pl: 499 }), 102.49, { halted: false });
 const aArmAt = tick("ANEW", pos({ peak_pl: 500 }), 102.5, { halted: false });
 check("A's trail arms exactly at +$500 and writes no price extreme", [(aArmLow.prior_patches || []).length, (aArmAt.prior_patches || []).filter((p) => p && p.price_trail_active === true), (aArmAt.prior_patches || []).some((p) => p && p.price_trail_extreme != null)], [0, [{ price_trail_active: true, price_trail_activated_time: NOW }], false]);
-check("the giveback rows are A, B, C, C_LEGACY and D from 2026-11-24", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, 100, 100, 100, 100]);
+check("the giveback rows from 2026-11-24: A, B and D have $100; C and C_LEGACY have none", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, 100, null, null, 100]);
 
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
 // 400 sh at $102.75 -> P&L $1,100, sized $40,000 at that price -> 389 shares.
