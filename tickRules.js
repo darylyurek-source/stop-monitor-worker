@@ -188,14 +188,15 @@ export function ruleKeyFor(system, position) {
 // the fallback for a system
 // that is not listed (a legacy record such as DART A's old 'A' alias). It is the
 // same table Base44 resolves, so the two engines cannot part company on it.
-// DART C (2026-11-16, the owner's rule 9 as amended): C's Hard Loss Stop is -$400,
-// decided on the two-print rule the price gate already enforces. C_LEGACY carries the
-// same number — it is the only C row a position can resolve to. A, B and D are NOT
-// changed.
+// DART C (2026-11-24, the owner's rule): C's Hard Loss Stop is -$1,150, still decided on
+// the two-print rule the price gate already enforces. C_LEGACY carries the same number — it
+// is the only C row a position can resolve to. It was -$400 from 2026-11-16.
+// DART A KEEPS -$400 EXPLICITLY: the A assignment further down no longer copies C's row, so
+// C's move cannot reach A. B and D keep -$400.
 // DART B's row is -$1,700 again (its 2026-11-06 configuration, restored 2026-11-19) and it
 // closes on ONE qualifying print, as it did then. A, C and D keep their own rows and the
 // two-print rule untouched.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -400, C: -400, C_LEGACY: -400, D: -400 };
+export const SYSTEM_HARD_STOP = { ANEW: -400, B: -400, C: -1150, C_LEGACY: -1150, D: -400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -544,7 +545,8 @@ export function isSystemHalted(system) {
 // account's own name (Profit Protection and the +$1,000 automatic arm).
 //
 // B, C and D are untouched: every row above keeps the value it had.
-//   hard loss stop / safety net  SYSTEM_HARD_STOP          -$1,200 -> C's -$400
+//   hard loss stop / safety net  SYSTEM_HARD_STOP          -$1,200 -> -$400, A's own fixed
+//                                level: C moved to -$1,150 on 2026-11-24 and A did not follow
 //   Profit Protection            SYSTEM_PARTIAL_PROFIT     +$1,850 -> C's +$850, 25%
 //   automatic hard stop          AUTO_ARM_PL_BY_SYSTEM     +$2,000 -> C's +$1,000, $250
 //   Protective Stop              PROTECTIVE_BY_SYSTEM      B's 55/65 -> C's 101/101 (off)
@@ -554,7 +556,10 @@ export function isSystemHalted(system) {
 //   presses                      CLONE_PRESS1 / PRESS_PLAN - already identical to C's:
 //                                +$200, then +$400, then +$1,100, $40,000 each
 // ---------------------------------------------------------------------------
-SYSTEM_HARD_STOP.ANEW = SYSTEM_HARD_STOP.C_LEGACY;
+// DART A KEEPS -$400 (owner, 2026-11-24): A's row used to be a copy of C's, so C's move to
+// -$1,150 would have taken A's with it. A's level is now its own fixed value and no other A
+// row moves.
+SYSTEM_HARD_STOP.ANEW = -400;
 SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;
 AUTO_ARM_PL_BY_SYSTEM.ANEW = AUTO_ARM_PL_BY_SYSTEM.C;
 // DART A (2026-11-25): A keeps its 101/101 $250 row as its own object, never C's, so C's new

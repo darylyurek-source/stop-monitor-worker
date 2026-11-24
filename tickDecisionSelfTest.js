@@ -49,11 +49,11 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system: A, B, C and D all press at +$200 from 2026-11-18", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [200, 200, 200, 200]);
-check("hard stop per system: A, B, C and D all -$400 (B adopted C's exit set 2026-11-24)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -400, -400, -400]);
+check("hard stop per system: A, B and D -$400, C -$1,150 (C's own move 2026-11-24; A kept -$400)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -400, -1150, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
-// with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
-// owner's rule 9 as amended); the "C" alias carries the same number.
-check("every C position resolves to C_LEGACY at -$400", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -400, -400]);
+// with none — resolves to C_LEGACY, whose hard stop is -$1,150 from 2026-11-24 (the owner's
+// rule); the "C" alias carries the same number.
+check("every C position resolves to C_LEGACY at -$1,150", [ruleKeyFor("C", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("C", { entry_time: "2026-11-16T16:00:00.000Z" }), ruleKeyFor("C", {}), systemStop("C_LEGACY"), systemStop("C")], ["C_LEGACY", "C_LEGACY", "C_LEGACY", -1150, -1150]);
 check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("ANEW", { entry_time: "2026-11-13T14:00:00.000Z" }), ruleKeyFor("D", {})], ["B", "ANEW", "D"]);
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
@@ -83,18 +83,18 @@ check("hard stop costs", [t1.commission_fees, t1.net_pl], [3.18, -1203.18]);
 // $98.00 is exactly -$400, $94.00 exactly -$1,200, $99.00 exactly -$200 and $99.50 -$100.
 check("A closes at -$400 (C's stop, from 2026-11-18)", [tick("ANEW", deep(), 98).event, tick("ANEW", deep(), 98).gross_pl], ["realtime_stop_close", -400]);
 check("A holds just above -$400", [tick("ANEW", deep(), 98.05).action], ["hold"]);
-check("A and C close at the same price", [tick("ANEW", deep(), 98).action, tick("C", deep(), 98).action], ["exit", "exit"]);
+check("A and C no longer share a stop: A closes at $98.00, C holds", [tick("ANEW", deep(), 98).action, tick("C", deep(), 98).action], ["exit", "hold"]);
 check("A no longer closes at -$1,200 or -$200", [tick("ANEW", deep(), 94).action, tick("ANEW", deep(), 99).action, tick("ANEW", deep(), 99.5).action], ["exit", "hold", "hold"]);
-check("B closes on the same price as C, through its own -$400 row", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
+check("B keeps its own -$400 row (at $94.00 it is simply deep through it)", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
 check("B holds just above -$400", [tick("B", deep(), 98.05).action], ["hold"]);
-check("C closes at -$400 (the owner's rule 9 as amended, 2026-11-16)", [tick("C", deep(), 98).event, tick("C", deep(), 98).gross_pl], ["realtime_stop_close", -400]);
-check("C holds just above -$400", [tick("C", deep(), 98.05).action], ["hold"]);
-check("C holds at the old -$300 that used to close it", [tick("C", deep(), 98.5).action], ["hold"]);
-check("C's stop is no longer -$1,200, so that price is simply deep through its own stop", [tick("C", deep(), 94).action, tick("C", deep(), 94).event], ["exit", "realtime_stop_close"]);
-// A C position opened on ANY later date runs the same -$1,200 — there is no cutover.
+check("C closes at -$1,150 (owner's rule, 2026-11-24)", [tick("C", deep(), 94.25).event, tick("C", deep(), 94.25).gross_pl], ["realtime_stop_close", -1150]);
+check("C holds just above -$1,150 ($94.26 is -$1,148)", [tick("C", deep(), 94.26).action], ["hold"]);
+check("C holds at the old -$400 that used to close it", [tick("C", deep(), 98).action, tick("C", deep(), 98.05).action], ["hold", "hold"]);
+check("C is deep through -$1,150 at -$1,200, so that price still closes it", [tick("C", deep(), 94).action, tick("C", deep(), 94).event], ["exit", "realtime_stop_close"]);
+// A C position opened on ANY later date runs the same -$1,150 — there is no cutover.
 const cNew = () => pos({ checked_loss_levels: ALL_LOSS_LEVELS, entry_time: "2026-11-16T16:00:00.000Z" });
-check("a later C position closes at the same -$400", [tick("C", cNew(), 98).event, tick("C", cNew(), 98).gross_pl], ["realtime_stop_close", -400]);
-check("a later C position holds just above -$400 and closes at -$400", [tick("C", cNew(), 98.05).action, tick("C", cNew(), 98).action], ["hold", "exit"]);
+check("a later C position closes at the same -$1,150", [tick("C", cNew(), 94.25).event, tick("C", cNew(), 94.25).gross_pl], ["realtime_stop_close", -1150]);
+check("a later C position holds just above -$1,150 and closes at -$1,150", [tick("C", cNew(), 94.26).action, tick("C", cNew(), 94.25).action], ["hold", "exit"]);
 check("D closes at -$400 and holds just above it", [tick("D", deep(), 98).event, tick("D", deep(), 98.05).action], ["realtime_stop_close", "hold"]);
 check("no account borrows another's stop: each holds above its own level", [tick("D", deep(), 99).action, tick("ANEW", deep(), 99.5).action, tick("B", deep(), 99).action], ["hold", "hold", "hold"]);
 
@@ -116,6 +116,16 @@ check("a confirming print deeper through the level closes it too", [tick("B", de
 check("a price back above the level holds and writes no exit", [tick("B", deep(), 98.05, { hardStopConfirm: confirmed }).action, tick("B", deep(), 98.05, { hardStopConfirm: confirmed }).exit_price ?? null], ["hold", null]);
 check("without confirmation one print still exits (replay and sweeps unchanged)", tick("B", deep(), 94).action, "exit");
 check("the confirmation covers every account's own stop", [tick("ANEW", deep(), 94, { hardStopConfirm: arming }).action, tick("C", deep(), 94, { hardStopConfirm: arming }).action, tick("D", deep(), 94, { hardStopConfirm: arming }).action], ["pending_confirm", "pending_confirm", "pending_confirm"]);
+
+// DART C alone, at its own -$1,150 (owner's cases, 2026-11-24): 200 sh at $100, $20,000 basis.
+// $94.26 is -$1,148 and holds; $94.25 is exactly -$1,150 — the first print arms it, the next
+// print at or through the level closes it. $98.00, the old -$400, no longer closes C.
+check("C holds at $94.26 (-$1,148)", tick("C", deep(), 94.26, { hardStopConfirm: arming }).action, "hold");
+check("C's first print at $94.25 only arms it", [tick("C", deep(), 94.25, { hardStopConfirm: arming }).action, tick("C", deep(), 94.25, { hardStopConfirm: arming }).reason], ["pending_confirm", "hard_stop_awaiting_second_print"]);
+const cFire = tick("C", deep(), 94.25, { hardStopConfirm: confirmed });
+check("C's next print at $94.25 closes it", [cFire.action, cFire.event, cFire.exit_price, cFire.gross_pl], ["exit", "realtime_stop_close", 94.25, -1150]);
+check("C's next print lower closes it too", [tick("C", deep(), 94, { hardStopConfirm: confirmed }).action, tick("C", deep(), 94, { hardStopConfirm: confirmed }).gross_pl], ["exit", -1200]);
+check("C at -$400 (the old level) holds, armed or not", [tick("C", deep(), 98).action, tick("C", deep(), 98, { hardStopConfirm: confirmed }).action], ["hold", "hold"]);
 
 // --- 2. PRESS 1 (B at +$200) --------------------------------------------------
 // 200 sh at $101.00 -> P&L $200, sized $40,000 at that price -> 396 shares.

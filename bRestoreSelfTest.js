@@ -17,7 +17,7 @@
 //     Protective     removed (101/101), exactly as on C
 //     Trail          C's $100 P&L giveback, armed at +$500 of position P&L
 //     Vector Exit    threshold 101, blocks running exactly as C's
-//     Hard Loss      -$400 on C's two-print rule
+//     Hard Loss      -$400 on its own row (C moved to -$1,150 on 2026-11-24)
 //     Session        15:00 ET, recorded as close_1500
 //
 // No network, no database, no clock, no trading record. Exit code 0 = every case passes.
@@ -73,8 +73,8 @@ check("A, C and D keep +$200 / +$400 / +$1,100",
    press1Threshold("C"), press2Threshold("C"), press3Threshold("C"),
    press1Threshold("D"), press2Threshold("D"), press3Threshold("D")],
   [200, 400, 1100, 200, 400, 1100, 200, 400, 1100]);
-check("B's hard loss stop is C's -$400", [systemStop("B"), systemStop("C")], [-400, -400]);
-check("A, C and D keep -$400", [systemStop("ANEW"), systemStop("C"), systemStop("D")], [-400, -400, -400]);
+check("B's hard loss stop is its own -$400; C carries -$1,150", [systemStop("B"), systemStop("C")], [-400, -1150]);
+check("A and D keep -$400, C carries -$1,150", [systemStop("ANEW"), systemStop("C"), systemStop("D")], [-400, -1150, -400]);
 check("B sells 25% once at +$850, as C does",
   [partialProfitPolicy("B"), partialProfitPolicy("C")],
   [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }]);

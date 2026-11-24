@@ -143,11 +143,12 @@ check("close: 2026-10-29 19:30Z is 15:30 EDT", etMinuteOfDay("2026-10-29T19:30:0
 // --- 5. stops, trail, vector, partial ----------------------------------------
 {
   check("stop: B's hard stop", systemStop("B"), -1200);
-  // DART C's hard stop moved from -$1,200 to -$300 on 2026-11-15 (the owner's rule 9), on
-  // every position and every date (tickRules.ruleKeyFor sends C to C_LEGACY, whose
-  // alias "C" carries the same -$300). Nothing else on C, or on any other DART, moved.
-  check("stop: C's hard stop is -$400", systemStop("C"), -400);
-  check("stop: C_LEGACY carries the same -$400", systemStop("C_LEGACY"), -400);
+  // DART C's hard stop moved to -$1,150 on 2026-11-24 (the owner's rule), on every position
+  // and every date (tickRules.ruleKeyFor sends C to C_LEGACY, whose alias "C" carries the same
+  // -$1,150). DART A keeps -$400 explicitly; B and D keep -$400.
+  check("stop: C's hard stop is -$1,150", systemStop("C"), -1150);
+  check("stop: C_LEGACY carries the same -$1,150", systemStop("C_LEGACY"), -1150);
+  check("stop: A keeps -$400", systemStop("ANEW"), -400);
   const hard = decideTick({ system: "B", position: pos({}), price: 50 - 1201 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
   check("stop: hard stop closes", hard.exit_reason, "realtime_stop_close");
   const justAbove = decideTick({ system: "B", position: pos({}), price: 50 - 1199 / 400, nowIso: "2026-10-30T14:00:00Z", vectorScore: 5 });
