@@ -312,7 +312,16 @@ export function decideTick(args) {
   const protectiveBuffer = protectivePolicy(ruleKey).buffer;
   const protectiveBreach = oldHigh != null && pl <= oldHigh - protectiveBuffer;
 
+  // THE $100 GIVEBACK TRAIL MEASURES THE WHOLE POSITION (owner, 2026-11-24): its high
+  // point, its arming test and its breach test all use TOTAL P&L — the profit already banked
+  // by the 25% Profit Protection sale plus the P&L of the shares still open — so the sale
+  // itself can never move the trail and can never close the position on a print that has not
+  // moved (PENG 2026-11-18: peak 1,023.33, next print total 1,006.16, both total terms).
+  // peakForTrail still feeds the share-price percentage trail's tier, and equals
+  // totalPlForTrail on any position that has not sold.
+  const totalPlForTrail = positionPl(pos, pl);
   const peakForTrail = Math.max(Number(pos.peak_pl) || 0, pl);
+  const peakTotalForTrail = Math.max(Number(pos.peak_pl) || 0, totalPlForTrail);
   // Driven by the system's ROW, not by C's name (2026-11-16): D carries the identical
   // $100 giveback trail, so both resolve here. A and B have no row, so both run the
   // share-price percentage trail the tier at line 326 feeds them: it arms at Press 2 at
@@ -341,8 +350,8 @@ export function decideTick(args) {
       ? { active: false, breach: false, oldExtreme: null, newExtreme: null, protectedLevel: null, pct: null }
       : assessPriceTrail(pos, price, tierPct);
   if (isC && pt.active) {
-    const floor = r2(peakForTrail - trailGiveback);
-    pt = { ...pt, breach: pl <= floor, protectedLevel: floor };
+    const floor = r2(peakTotalForTrail - trailGiveback);
+    pt = { ...pt, breach: totalPlForTrail <= floor, protectedLevel: floor };
   }
 
   const priorPatches = [];
@@ -354,7 +363,7 @@ export function decideTick(args) {
   const trailArmsNow = trailOff
     ? false
     : isC
-      ? (!pt.active && peakForTrail >= C_TRAIL_ARM_PL)
+      ? (!pt.active && peakTotalForTrail >= C_TRAIL_ARM_PL)
       : (!pt.active && pos.pressed_2r);
   if (trailArmsNow) {
     priorPatches.push(isC
