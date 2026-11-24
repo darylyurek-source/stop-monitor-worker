@@ -158,7 +158,7 @@ check("B's armed stop closes on a $250 giveback",
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).event,
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).gross_pl],
   ["exit", "protective_stop", 1050]);
-check("one cent above B's giveback both hold: B flat, C re-basing its grid", [tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, tick("C", pos(armedPos), 105.26, { vectorScore: 5 }).action], ["hold", "grid"]);
+check("one cent above B's giveback neither account closes: both hold, each re-basing its own grid", [tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, tick("C", pos(armedPos), 105.26, { vectorScore: 5 }).action], ["grid", "grid"]);
 
 check("B holds at 14:59 ET",
   decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");
