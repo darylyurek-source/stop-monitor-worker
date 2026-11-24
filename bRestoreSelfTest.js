@@ -2,6 +2,10 @@
 //
 //     node bRestoreSelfTest.js
 //
+// PROOF REVISION 2 (2026-11-24): the press ladder and the giveback boundary are tested on a
+// position whose 25% sale has already been taken, because Profit Protection (+$850) answers
+// before a press and before the giveback on C's row — which B now runs.
+//
 // FROM THE 2026-11-24 SESSION DART B TRADES DART C'S LIVE EXIT SET, VALUE FOR VALUE.
 // B's stock selection and entry method are unchanged. A, C and D are untouched: every one
 // of their rows is asserted beside B's, and every B check is written so it fails if B ever
@@ -39,6 +43,7 @@ const pos = (over) => ({
 });
 
 const allPressed = { pressed_1r: true, pressed_2r: true, pressed_3r: true };
+const sold = { partial_profit_taken: true };
 
 const tick = (system, position, price, extra) =>
   decideTick({ system, position, price, nowIso: NOW, ...(extra || {}) });
@@ -98,12 +103,13 @@ check("Press 1 does NOT arm a price trail on B (C's trail is a P&L rule)",
   press1.patch.price_trail_active ?? null, null);
 
 // 596 sh, tcb $59,996: the price that puts P&L at $400 is (59,996 + 400) / 596.
-const rung2 = pos({ pressed_1r: true, shares: 596, tcb: 59996, peak_pl: 400 });
+const rung2 = pos({ pressed_1r: true, shares: 596, tcb: 59996, peak_pl: 400, ...sold });
 check("B holds just under its +$400 Press 2",
   tick("B", rung2, (59996 + 399.5) / 596, { vectorScore: 5 }).action, "hold");
 check("B presses at +$400", tick("B", rung2, (59996 + 400.5) / 596, { vectorScore: 5 }).event, "press2");
 // 992 sh, tcb $99,992: the price that puts P&L at $1,100 is (99,992 + 1,100) / 992.
-const rung3 = pos({ pressed_1r: true, pressed_2r: true, shares: 992, tcb: 99992, peak_pl: 1100 });
+// The 25% sale is already taken, so nothing answers before the press on this tick.
+const rung3 = pos({ pressed_1r: true, pressed_2r: true, shares: 992, tcb: 99992, peak_pl: 1100, ...sold });
 check("B presses at +$1,100", tick("B", rung3, (99992 + 1100.5) / 992, { vectorScore: 5 }).event, "press3");
 
 // 200 sh at $100.00 (tcb $20,000): $98.00 is exactly -$400, and $98.01 is -$398.
@@ -123,7 +129,7 @@ check("B takes no sale just under +$850",
   tick("B", pos({ ...allPressed, peak_pl: 848 }), 104.24, { vectorScore: 5 }).action, "hold");
 
 // C's $100 trail: armed, a $800 peak protects $700.
-const trailArmed = pos({ ...allPressed, price_trail_active: true, peak_pl: 800 });
+const trailArmed = pos({ ...allPressed, price_trail_active: true, peak_pl: 800, ...sold });
 check("B's $100 trail closes at peak minus $100 ($103.50)",
   [tick("B", trailArmed, 103.5, { vectorScore: 5 }).action,
    tick("B", trailArmed, 103.5, { vectorScore: 5 }).event,
@@ -132,7 +138,7 @@ check("B's $100 trail closes at peak minus $100 ($103.50)",
 check("B holds one cent above the trail's floor", tick("B", trailArmed, 103.51, { vectorScore: 5 }).action, "hold");
 
 // Armed at a $1,300 high-water: the stop sits at 1,300 - 250 = $1,050 of P&L ($105.25).
-const armedPos = { ...allPressed, protective_stop_active: true, protective_high_water_pl: 1300, peak_pl: 100 };
+const armedPos = { ...allPressed, protective_stop_active: true, protective_high_water_pl: 1300, peak_pl: 100, ...sold };
 check("B's armed stop closes on a $250 giveback",
   [tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).action,
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).event,
@@ -141,12 +147,12 @@ check("B's armed stop closes on a $250 giveback",
 check("B holds above the giveback", tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, "hold");
 
 check("B holds at 14:59 ET",
-  decideTick({ system: "B", position: pos(allPressed), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");
+  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");
 check("B closes at 15:00 ET as close_1500",
-  decideTick({ system: "B", position: pos(allPressed), price: 101, nowIso: "2026-11-24T20:00:00.000Z" }).event, "close_1500");
+  decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T20:00:00.000Z" }).event, "close_1500");
 
 // --- OFFICIAL EARLY CLOSES (1:00 PM ET) ---------------------------------------
-const atEarly = (system, iso, price = 101) => decideTick({ system, position: pos(allPressed), price, nowIso: iso });
+const atEarly = (system, iso, price = 101) => decideTick({ system, position: pos({ ...allPressed, ...sold }), price, nowIso: iso });
 for (const iso of ["2026-11-27T18:01:00.000Z", "2026-12-24T18:01:00.000Z"]) {
   check("all four close at 13:00 ET on " + iso.slice(0, 10) + " (early close)",
     ["ANEW", "B", "C", "D"].map((s) => atEarly(s, iso).event),

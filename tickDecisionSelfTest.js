@@ -49,7 +49,7 @@ function check(name, actual, expected) {
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
 check("Press 1 per system: A, B, C and D all press at +$200 from 2026-11-18", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [200, 200, 200, 200]);
-check("hard stop per system: A -$400 (C's row from 2026-11-18), B -$1,200, C -$400, D -$400 (D adopted C's rule set 2026-11-16)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -1200, -400, -400]);
+check("hard stop per system: A, B, C and D all -$400 (B adopted C's exit set 2026-11-24)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -400, -400, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
 // with none — resolves to C_LEGACY, whose hard stop is -$400 from 2026-11-16 (the
 // owner's rule 9 as amended); the "C" alias carries the same number.
@@ -58,11 +58,11 @@ check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entr
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A carries C's row from 2026-11-18 — 101/101 and $250, so no Vector can arm an A position; B keeps 55/65 and $350; D 101/101 and $250", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 55, 65, 350, 101, 101, 250, 101, 101, 250]);
+check("protective policy: A, B, C and D all carry 101/101, so no Vector can arm any of them (B adopted C's exit set 2026-11-24)", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 101, 101, 250, 101, 101, 250, 101, 101, 250]);
 check("D runs A's rule set (no Protective Stop) and D's own press is +$200", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 200, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
-check("Profit Protection: A(ANEW) sells 25% at +$850 from 2026-11-18, as C and D do; B sells 25% at +$1,850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 850, fraction: 0.25 }, { threshold: 1850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
+check("Profit Protection: A, B, C and D all sell 25% at +$850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
 
 // Every loss level is pre-checked on the positions below, so no Vector checkpoint can
 // act and the hard stop is the only rule that can speak on these prices.
@@ -85,8 +85,8 @@ check("A closes at -$400 (C's stop, from 2026-11-18)", [tick("ANEW", deep(), 98)
 check("A holds just above -$400", [tick("ANEW", deep(), 98.05).action], ["hold"]);
 check("A and C close at the same price", [tick("ANEW", deep(), 98).action, tick("C", deep(), 98).action], ["exit", "exit"]);
 check("A no longer closes at -$1,200 or -$200", [tick("ANEW", deep(), 94).action, tick("ANEW", deep(), 99).action, tick("ANEW", deep(), 99.5).action], ["exit", "hold", "hold"]);
-check("B closes at -$1,200", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
-check("B holds just above -$1,200", [tick("B", deep(), 94.5).action], ["hold"]);
+check("B closes on the same price as C, through its own -$400 row", [tick("B", deep(), 94).event, tick("B", deep(), 94).gross_pl], ["realtime_stop_close", -1200]);
+check("B holds just above -$400", [tick("B", deep(), 98.05).action], ["hold"]);
 check("C closes at -$400 (the owner's rule 9 as amended, 2026-11-16)", [tick("C", deep(), 98).event, tick("C", deep(), 98).gross_pl], ["realtime_stop_close", -400]);
 check("C holds just above -$400", [tick("C", deep(), 98.05).action], ["hold"]);
 check("C holds at the old -$300 that used to close it", [tick("C", deep(), 98.5).action], ["hold"]);
@@ -113,7 +113,7 @@ check("the arming print writes nothing to the trade", [armTick.exit_price ?? nul
 const fireTick = tick("B", deep(), 94, { hardStopConfirm: confirmed });
 check("the second print through the level CLOSES it, at the same numbers", [fireTick.action, fireTick.event, fireTick.exit_price, fireTick.gross_pl, fireTick.net_pl], ["exit", "realtime_stop_close", 94, -1200, -1203.18]);
 check("a confirming print deeper through the level closes it too", [tick("B", deep(), 93.5, { hardStopConfirm: confirmed }).action, tick("B", deep(), 93.5, { hardStopConfirm: confirmed }).gross_pl], ["exit", -1300]);
-check("a price back above the level holds and writes no exit", [tick("B", deep(), 94.5, { hardStopConfirm: confirmed }).action, tick("B", deep(), 94.5, { hardStopConfirm: confirmed }).exit_price ?? null], ["hold", null]);
+check("a price back above the level holds and writes no exit", [tick("B", deep(), 98.05, { hardStopConfirm: confirmed }).action, tick("B", deep(), 98.05, { hardStopConfirm: confirmed }).exit_price ?? null], ["hold", null]);
 check("without confirmation one print still exits (replay and sweeps unchanged)", tick("B", deep(), 94).action, "exit");
 check("the confirmation covers every account's own stop", [tick("ANEW", deep(), 94, { hardStopConfirm: arming }).action, tick("C", deep(), 94, { hardStopConfirm: arming }).action, tick("D", deep(), 94, { hardStopConfirm: arming }).action], ["pending_confirm", "pending_confirm", "pending_confirm"]);
 
@@ -172,7 +172,7 @@ check(
   [t5b.patch.shares, t5b.patch.partial_profit_taken, t5b.patch.partial_exits.length],
   [150, true, 1]
 );
-check("B holds below +$1,850", tick("B", pos(), 108, { vectorScore: 20 }).action === "partial", false);
+check("B holds below +$850", tick("B", pos(), 104, { vectorScore: 20 }).action === "partial", false);
 check(
   "B sells only once",
   tick("B", pos({ partial_profit_taken: true, partial_exits: [{ gross_pl: 500 }] }), 110, { vectorScore: 70 }).action === "partial",
@@ -182,20 +182,21 @@ check(
 // --- 6. DOWNSIDE VECTOR EXIT (score 80) --------------------------------------
 // B's stop is -$1,200, so this price is -$300: crossed checkpoints without the stop.
 const t6 = tick("B", pos(), 98.5, { vectorScore: 80 });
-check("downside Vector exit", [t6.action, t6.event, t6.vector_level, t6.patch.checked_loss_levels], ["exit", "vector_exit", -100, [-100]]);
+const t6C = tick("C", pos(), 98.5, { vectorScore: 80 });
+check("no Vector score can close B — it answers exactly as C does", [t6.action, t6.action === t6C.action, t6.event === "vector_exit", t6.vector_level ?? null], ["hold", true, false, null]);
 
 // --- 7. DOWNSIDE VECTOR HOLD (score 40) --------------------------------------
 const t7 = tick("B", pos(), 98.5, { vectorScore: 40 });
 check("downside hold records every level", [t7.action, t7.event, t7.patch.checked_loss_levels.length, t7.patch.checked_loss_levels[2]], ["hold", "vector_checkpoint_hold", 3, -300]);
 
 // --- 8. PROTECTIVE GIVEBACK ---------------------------------------------------
-// high-water $1,300, buffer $350 -> protected $950; P&L $940 breaches it.
+// high-water $1,300, buffer $250 (B's own row from 2026-11-24) -> protected $1,050; P&L $940 breaches it.
 const t8 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1300 }), 104.7);
 check("protective giveback exits", [t8.action, t8.event, t8.gross_pl, t8.commission_fees, t8.net_pl], ["exit", "protective_stop", 940, 3.45, 936.55]);
 
 // --- 9. PROTECTIVE HIGH-WATER RATCHET (no breach) -----------------------------
-const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
-check("high-water ratchets up", [t9.action, t9.prior_patches[0]], ["grid", { protective_high_water_pl: 1200 }]);
+const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000, price_trail_active: true, peak_pl: 1200, partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true }), 106, { vectorScore: 20 });
+check("high-water ratchets up", [t9.action, t9.prior_patches[0]], ["hold", { protective_high_water_pl: 1200 }]);
 
 // --- 10. PRICE TRAIL (C: $100 DOLLAR GIVEBACK) -------------------------------
 // C's trail arms at +$500 of peak P&L and then closes on the first print whose P&L is
@@ -231,7 +232,7 @@ check("A's trail exits on C's $100 giveback from its peak", [aTrail.action, aTra
 const aArmLow = tick("ANEW", pos({ peak_pl: 499 }), 102.49, { halted: false });
 const aArmAt = tick("ANEW", pos({ peak_pl: 500 }), 102.5, { halted: false });
 check("A's trail arms exactly at +$500 and writes no price extreme", [(aArmLow.prior_patches || []).length, (aArmAt.prior_patches || []).filter((p) => p && p.price_trail_active === true), (aArmAt.prior_patches || []).some((p) => p && p.price_trail_extreme != null)], [0, [{ price_trail_active: true, price_trail_activated_time: NOW }], false]);
-check("the giveback rows are C, C_LEGACY, D and A; B keeps the price trail", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, null, 100, 100, 100]);
+check("the giveback rows are A, B, C, C_LEGACY and D from 2026-11-24", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, 100, 100, 100, 100]);
 
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------
 // 400 sh at $102.75 -> P&L $1,100, sized $40,000 at that price -> 389 shares.
@@ -240,7 +241,7 @@ check("the giveback rows are C, C_LEGACY, D and A; B keeps the price trail", [tr
 // the grid's checkpoint is resolved first, which is why the position is handed in with
 // the grid already standing at +$1,100. The press rule itself is untouched.
 const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
-const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
+const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, partial_profit_taken: true }), 102.75, { vectorScore: 5 });
 check("press 3 fires before any press 2 repeat", [t11.action, t11.event, t11.press_level, t11.shares_added, t11.shares_after, t11.commission_fees], ["press", "press3", "3R", 389, 789, 5.44]);
 
 // --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
@@ -280,7 +281,7 @@ const driftBars = driftAgainst("long");
 // 200 sh at 100, price 99.40 -> P&L -$120, so the -$100 checkpoint is crossed and
 // the score decides it. No vectorScore argument: the candles must supply it.
 const t16 = decideTick({ system: "B", position: pos(), price: 99.4, nowIso: NOW, candles: driftBars });
-check("candles supply the score the downside check needs", [t16.action, t16.event, t16.vector_source], ["exit", "vector_exit", "candles"]);
+check("candles supply the score the downside check needs (and cannot close B)", [t16.action, t16.event, t16.vector_source], ["hold", "vector_checkpoint_hold", "candles"]);
 check("the engine's score is the Vector module's own", t16.vector_score, computeVector(driftBars, driftBars.length - 1, "long", 100).combined_reversal_score);
 
 // The live engine's own fallback (0 when its candle fetch is empty) must be opt-in,
@@ -291,8 +292,8 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, C and D arm at +$1,000 (A carries C's row from 2026-11-18), B at +$2,000", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, 2000, 1000, 1000]);
-check("B sells 25% once at +$1,850", partialProfitPolicy("B"), { threshold: 1850, fraction: 0.25 });
+check("A, B, C and D all arm at +$1,000 (B adopted C's exit set 2026-11-24)", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, 1000, 1000, 1000]);
+check("B sells 25% once at +$850", partialProfitPolicy("B"), { threshold: 850, fraction: 0.25 });
 check("A sells C's quarter at +$850 (A carries C's exit set from 2026-11-18)", partialProfitPolicy("ANEW"), { threshold: 850, fraction: 0.25 });
 check("D sells a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });
 check("C sells a quarter at +$850 from 2026-11-15 (the owner's rule 6)", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
@@ -301,13 +302,13 @@ check("D's single press is +$200, sized from buying power, and does NOT start th
 // The Protective Stop and the Vector Exit were REMOVED from C on 2026-11-15 and from D on
 // 2026-11-16 (the owner's rule sets): both thresholds are unreachable on every C and D row,
 // so neither rule can act on a C or a D position. A carries C's rows from 2026-11-18;
-// B keeps 55/65 and the 65 exit.
+// B carries C's rows from 2026-11-24, so all four accounts read the same numbers.
 check(
-  "C and D can never arm (101/101), never touching B's 55/65",
+  "A, B, C and D can never arm (101/101)",
   [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
-  [101, 101, 101, 101, 101, 101, 55, 65]
+  [101, 101, 101, 101, 101, 101, 101, 101]
 );
-check("giveback after the automatic arm: A, C and D $250, B $350", [protectivePolicy("ANEW").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 250, 250, 350]);
+check("giveback after the automatic arm: A, B, C and D all $250", [protectivePolicy("ANEW").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 250, 250, 250]);
 
 // --- 18b. D IS A'S RULE SET, PRESS ASIDE (2026-11-18, the owner's STEP 6) ------
 // Every exit row D resolves must equal A's, row for row: the hard stop, the Protective
@@ -328,7 +329,7 @@ const pA = tick("ANEW", pos(), 101.25, { halted: false });
 check("the difference is the rung count and the size: both press at +$200, A three times at $40,000, D once from buying power",
   [pA.event, pA.pl_raw, pA.press_size_usd, pA.shares_added, press1Threshold("ANEW"), press1Threshold("D"), pressPlan("ANEW"), pressPlan("D").single],
   ["press1", 250, 40000, 395, 200, 200, null, true]);
-check("Vector Exit: A, C and D can never fire (101), B stays 65", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 65]);
+check("Vector Exit: A, B, C and D can never fire (101)", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 101]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
 // Every account closes its book at 15:00 ET from the 2026-11-19 session and records
