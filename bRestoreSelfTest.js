@@ -75,13 +75,13 @@ check("A, C and D keep +$200 / +$400 / +$1,100",
   [200, 400, 1100, 200, 400, 1100, 200, 400, 1100]);
 check("B's hard loss stop is its own -$400; C carries -$1,150", [systemStop("B"), systemStop("C")], [-400, -1150]);
 check("A and D keep -$400, C carries -$1,150", [systemStop("ANEW"), systemStop("C"), systemStop("D")], [-400, -1150, -400]);
-check("B sells 25% once at +$850, as C does",
+check("B sells 25% once at +$850; C's own sale waits for +$1,400 from 2026-11-25",
   [partialProfitPolicy("B"), partialProfitPolicy("C")],
-  [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }]);
-check("B has NO automatic arm: autoArmPolicy(\"B\") is null, C keeps +$1,000", [autoArmPolicy("B"), autoArmPolicy("C")], [null, 1000]);
-check("B's protective row is its OWN 101 / 101 / $250, never C's new $400",
+  [{ threshold: 850, fraction: 0.25 }, { threshold: 1400, fraction: 0.25 }]);
+check("B has NO automatic arm: autoArmPolicy(\"B\") is null, C arms at +$1,400", [autoArmPolicy("B"), autoArmPolicy("C")], [null, 1400]);
+check("B's protective row is its OWN 101 / 101 / $250, never C's $350",
   [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C_LEGACY").buffer],
-  [101, 101, 250, 400]);
+  [101, 101, 250, 350]);
 check("B's protective row is 101 / 101 / 250",
   [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer],
   [101, 101, 250]);
@@ -121,7 +121,10 @@ check("B presses at +$400", tick("B", rung2, (59996 + 400.5) / 596, { vectorScor
 // C does on the same position rather than reach a rung C never reaches.
 const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
 const atPress3 = asC(102.75, { pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }, { vectorScore: 5 });
-check("B presses exactly as C does at a +$1,100 tick", atPress3.equal, true);
+check("at a +$1,100 tick B sells its quarter at +$850 while C presses (its sale waits for +$1,400)",
+  [tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 }).action,
+   tick("C", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 }).event],
+  ["partial", "press3"]);
 
 // 200 sh at $100.00 (tcb $20,000): $98.00 is exactly -$400, and $98.01 is -$398.
 check("B's hard loss stop closes at -$400 (200 sh, $20,000 basis, $98.00)",
@@ -155,7 +158,7 @@ check("B's armed stop closes on a $250 giveback",
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).event,
    tick("B", pos(armedPos), 105.25, { vectorScore: 5 }).gross_pl],
   ["exit", "protective_stop", 1050]);
-check("B answers exactly as C does one cent above the giveback", asC(105.26, armedPos, { vectorScore: 5 }).equal, true);
+check("one cent above B's giveback both hold: B flat, C re-basing its grid", [tick("B", pos(armedPos), 105.26, { vectorScore: 5 }).action, tick("C", pos(armedPos), 105.26, { vectorScore: 5 }).action], ["hold", "grid"]);
 
 check("B holds at 14:59 ET",
   decideTick({ system: "B", position: pos({ ...allPressed, ...sold }), price: 101, nowIso: "2026-11-24T19:59:00.000Z" }).action, "hold");

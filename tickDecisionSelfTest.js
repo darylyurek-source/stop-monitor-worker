@@ -58,11 +58,11 @@ check("ruleKeyFor leaves every other account untouched", [ruleKeyFor("B", { entr
 // Every live account carries its own row; the shared -$1,700 survives only as the
 // fallback for a legacy record such as DART A's old "A" alias.
 check("an unlisted legacy system falls back to the shared -$1,700", systemStop("A"), -1700);
-check("protective policy: A, B, C and D all carry 101/101, so no Vector can arm any of them; A and B keep $250, C and C_LEGACY carry C's new $400 (2026-11-25)", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 101, 101, 250, 101, 101, 400, 101, 101, 250]);
+check("protective policy: A, B, C and D all carry 101/101, so no Vector can arm any of them; A and B keep $250, C and C_LEGACY carry C's own $350 (2026-11-25)", [protectivePolicy("ANEW").stockThreshold, protectivePolicy("ANEW").marketThreshold, protectivePolicy("ANEW").buffer, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").buffer], [101, 101, 250, 101, 101, 250, 101, 101, 350, 101, 101, 250]);
 check("D runs A's rule set (no Protective Stop) and D's own press is +$200", [protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, press1Threshold("D"), pressPlan("D").single], [101, 101, 200, true]);
 // A trades as ANEW in every table; "A" survives only as a legacy alias (protective
 // policy keeps one so a historical record still resolves, the partial table does not).
-check("Profit Protection: A, B, C and D all sell 25% at +$850; E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
+check("Profit Protection: A, B and D sell 25% at +$850, C at +$1,400 (2026-11-25); E and the 'A' alias have none", [partialProfitPolicy("ANEW"), partialProfitPolicy("B"), partialProfitPolicy("C"), partialProfitPolicy("D"), partialProfitPolicy("E"), partialProfitPolicy("A")], [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, { threshold: 1400, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }, null, null]);
 
 // Every loss level is pre-checked on the positions below, so no Vector checkpoint can
 // act and the hard stop is the only rule that can speak on these prices.
@@ -156,7 +156,7 @@ check("D under the $20,000 floor skips", tick("D", pos(), 101.0, { halted: false
 // A trades C's exit set from 2026-11-18, so its Profit Protection is C's: a quarter,
 // once, at +$850. 200 sh at $110 on a $100 basis is +$2,000.
 const t4 = tick("ANEW", pos(), 110, { vectorScore: 30 });
-check("A sells 25% at +$850 (C's row)", [t4.action, t4.event, t4.sold_shares, t4.remaining_shares, t4.gross_pl], ["partial", "partial_profit_exit", 50, 150, 500]);
+check("A sells 25% at +$850 (its own row from 2026-11-25)", [t4.action, t4.event, t4.sold_shares, t4.remaining_shares, t4.gross_pl], ["partial", "partial_profit_exit", 50, 150, 500]);
 
 // --- 5. A (ANEW) HAS NO VECTOR EXIT — EXACTLY LIKE C -------------------------
 // C's Vector Exit was removed on 2026-11-15 (101 is unreachable) and A carries C's row
@@ -165,8 +165,8 @@ check("A sells 25% at +$850 (C's row)", [t4.action, t4.event, t4.sold_shares, t4
 const t5 = tick("ANEW", pos(), 105, { vectorScore: 70 });
 const t5C = tick("C", pos(), 105, { vectorScore: 70 });
 check("A has no Vector Exit (101, as C's)", [vectorExitThreshold("ANEW"), vectorExitThreshold("C_LEGACY")], [101, 101]);
-check("A's verdict at this price is C's verdict, field for field", [t5.action, t5.event, t5.sold_shares, t5.remaining_shares, JSON.stringify(t5.prior_patches)], [t5C.action, t5C.event, t5C.sold_shares, t5C.remaining_shares, JSON.stringify(t5C.prior_patches)]);
-check("neither account exits on the Vector any more", [t5.event, t5C.event, t5.vector_level ?? null, t5C.vector_level ?? null], ["partial_profit_exit", "partial_profit_exit", null, null]);
+check("at +$1,000 A sells its quarter while C waits for +$1,400 (their rows parted on 2026-11-25)", [t5.action, t5.event, t5.sold_shares, t5C.sold_shares ?? null, t5C.event === "partial_profit_exit"], ["partial", "partial_profit_exit", 50, null, false]);
+check("neither account exits on the Vector any more", [t5.event, t5C.event, t5.vector_level ?? null, t5C.vector_level ?? null], ["partial_profit_exit", "vector_profit_activate", null, null]);
 
 // --- 5b. B'S 25% SALE AT +$1,850 (added 2026-11-10, at the owner's direction) --
 // The same position at +$2,000 sells a quarter of its 200 shares before anything
@@ -207,7 +207,7 @@ check("protective giveback exits", [t8.action, t8.event, t8.gross_pl, t8.commiss
 // --- 9. PROTECTIVE HIGH-WATER RATCHET (no breach) -----------------------------
 const t9 = tick("B", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
 const t9C = tick("C", pos({ protective_stop_active: true, protective_high_water_pl: 1000 }), 106, { vectorScore: 20 });
-check("at and above +$900 B answers exactly as C does (C's own upside grid owns the tick)", [t9.action, t9.action === t9C.action, t9.event === t9C.event], ["grid", true, true]);
+check("from 2026-11-25 B sells its quarter at +$850 where C waits for +$1,400 and re-bases its grid", [t9.action, t9.event, t9C.action, t9C.event], ["partial", "partial_profit_exit", "grid", "vector_profit_activate"]);
 
 // --- 10. PRICE TRAIL (C HAS NONE FROM 2026-11-24; A AND D KEEP THE $100) -------
 // DART C's $100 giveback trail was REMOVED (owner, in force from the 2026-11-24 session): C
@@ -252,7 +252,7 @@ check("the giveback rows from 2026-11-24: A, B and D have $100; C and C_LEGACY h
 const gridAt1100 = { profit_grid_active: true, last_profit_level: 1100, next_up_profit_level: 1200, next_down_profit_level: 1000 };
 const t11 = tick("B", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
 const t11C = tick("C", pos({ pressed_1r: true, pressed_2r: true, shares: 400, tcb: 40000, ...gridAt1100 }), 102.75, { vectorScore: 5 });
-check("on a press-3 tick B answers exactly as C does: the +$850 sale answers first", [t11.action, t11.event, t11.sold_shares ?? null, t11.action === t11C.action, t11.event === t11C.event], ["partial", "partial_profit_exit", 100, true, true]);
+check("on a press-3 tick B sells its quarter at +$850 while C presses (its sale waits for +$1,400)", [t11.action, t11.event, t11.sold_shares ?? null, t11C.action, t11C.event, t11C.shares_added ?? null], ["partial", "partial_profit_exit", 100, "press", "press3", 389]);
 
 // --- 12. HALTED ACCOUNT: no writes, no decisions -----------------------------
 // No DART is halted today — A, B, C and D all trade and E is gone from the engine —
@@ -302,11 +302,11 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, C and D arm at +$1,000; B has NO automatic arm from 2026-11-25", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, null, 1000, 1000]);
+check("A and D arm at +$1,000, C arms at +$1,400 (the print its 25% sale fires on); B has NO automatic arm from 2026-11-25", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, null, 1400, 1000]);
 check("B sells 25% once at +$850", partialProfitPolicy("B"), { threshold: 850, fraction: 0.25 });
 check("A sells C's quarter at +$850 (A carries C's exit set from 2026-11-18)", partialProfitPolicy("ANEW"), { threshold: 850, fraction: 0.25 });
 check("D sells a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });
-check("C sells a quarter at +$850 from 2026-11-15 (the owner's rule 6)", partialProfitPolicy("C"), { threshold: 850, fraction: 0.25 });
+check("C sells a quarter at +$1,400 from 2026-11-25 (the owner's rule)", partialProfitPolicy("C"), { threshold: 1400, fraction: 0.25 });
 check("E has no row in any rule table", [partialProfitPolicy("E"), autoArmPolicy("E"), pressPlan("E")], [null, null, null]);
 check("D's single press is +$200, sized from buying power, and does NOT start the trail (rule 8 arms it at +$500)", [press1Threshold("D"), pressPlan("D").single, pressPlan("D").dynamicSize, pressPlan("D").trailAtFirstPress], [200, true, true, false]);
 // The Protective Stop and the Vector Exit were REMOVED from C on 2026-11-15 and from D on
@@ -318,7 +318,7 @@ check(
   [protectivePolicy("C").stockThreshold, protectivePolicy("C").marketThreshold, protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold],
   [101, 101, 101, 101, 101, 101, 101, 101]
 );
-check("giveback after the automatic arm: A, B and D $250, C and C_LEGACY $400", [protectivePolicy("ANEW").buffer, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 400, 400, 250, 250]);
+check("giveback after the automatic arm: A, B and D $250, C and C_LEGACY $350", [protectivePolicy("ANEW").buffer, protectivePolicy("C").buffer, protectivePolicy("C_LEGACY").buffer, protectivePolicy("D").buffer, protectivePolicy("B").buffer], [250, 350, 350, 250, 250]);
 
 // --- 18b. D IS A'S RULE SET, PRESS ASIDE (2026-11-18, the owner's STEP 6) ------
 // Every exit row D resolves must equal A's, row for row: the hard stop, the Protective

@@ -225,7 +225,11 @@ export const SYSTEM_PARTIAL_PROFIT = {
   // The row removed on 2026-11-06 is restored; its one remaining difference from B
   // is now the Vector test below (C's own arming thresholds and its own Vector Exit).
   // DART C (2026-11-15, the owner's rule 6): 25% once at +$850, not +$1,850.
-  C: { threshold: 850, fraction: 0.25 },
+  // DART C (2026-11-25, the owner's rule): ONE Profit Protection rule — 25% once at +$1,400.
+  // The automatic arm below moves to the same +$1,400, so the stop arms on the SAME print as
+  // the sale and its high point is stored against the remaining 150 shares' P&L (the
+  // same-print adjustment in planPartialProfit).
+  C: { threshold: 1400, fraction: 0.25 },
 };
 
 // THE +$2,000 AUTO-ARM — carried by DART B (from 2026-11-09), DART A (ANEW, same date),
@@ -246,7 +250,9 @@ export const AUTO_ARM_PL_BY_SYSTEM = {
   D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
   // the Protective Stop was removed from C on the same day.
-  C: 1000,
+  // DART C (2026-11-25, the owner's rule): +$1,400 — the same print as C's 25% sale, so the
+  // $350 giveback runs from the remaining shares' own high point. It is C's ONLY arming level.
+  C: 1400,
 };
 
 export function autoArmPolicy(system) {
@@ -315,10 +321,12 @@ const STOP_250_RULE_SET = {
 // position — and its Automatic Hard Stop now gives back $400 instead of $250 from the high-water
 // P&L once it arms at +$1,000 (AUTO_ARM_PL_BY_SYSTEM.C). Everything else about C is unchanged,
 // and the adjustment after the 25% sale works exactly as before with this amount.
+// 2026-11-25: C's ONE Profit Protection rule sells 25% at +$1,400 and arms the stop on the same
+// print, so the giveback is $350 on the remaining shares' P&L. Thresholds stay 101/101.
 const C_LIVE_RULE_SET = {
   stockThreshold: C_LEGACY_STOCK_ARM,
   marketThreshold: C_LEGACY_MARKET_ARM,
-  buffer: 400,
+  buffer: 350,
 };
 
 export const PROTECTIVE_BY_SYSTEM = {
@@ -547,8 +555,10 @@ export function isSystemHalted(system) {
 // B, C and D are untouched: every row above keeps the value it had.
 //   hard loss stop / safety net  SYSTEM_HARD_STOP          -$1,200 -> -$400, A's own fixed
 //                                level: C moved to -$1,150 on 2026-11-24 and A did not follow
-//   Profit Protection            SYSTEM_PARTIAL_PROFIT     +$1,850 -> C's +$850, 25%
-//   automatic hard stop          AUTO_ARM_PL_BY_SYSTEM     +$2,000 -> C's +$1,000, $250
+//   Profit Protection            SYSTEM_PARTIAL_PROFIT     +$1,850 -> +$850, 25%, A's own fixed
+//                                row: C moved to +$1,400 on 2026-11-25 and A did not follow
+//   automatic hard stop          AUTO_ARM_PL_BY_SYSTEM     +$2,000 -> +$1,000, A's own fixed
+//                                row: C moved to +$1,400 on 2026-11-25 and A did not follow
 //   Protective Stop              PROTECTIVE_BY_SYSTEM      B's 55/65 -> C's 101/101 (off)
 //   trailing stop                TRAIL_GIVEBACK_BY_SYSTEM  price trail -> C's $100 giveback
 //   Vector Exit                  VECTOR_EXIT_BY_SYSTEM     65 -> C's 101 (off)
@@ -560,8 +570,11 @@ export function isSystemHalted(system) {
 // -$1,150 would have taken A's with it. A's level is now its own fixed value and no other A
 // row moves.
 SYSTEM_HARD_STOP.ANEW = -400;
-SYSTEM_PARTIAL_PROFIT.ANEW = SYSTEM_PARTIAL_PROFIT.C;
-AUTO_ARM_PL_BY_SYSTEM.ANEW = AUTO_ARM_PL_BY_SYSTEM.C;
+// DART A KEEPS ITS OWN PROFIT ROWS (owner, 2026-11-25): A's Profit Protection and its automatic
+// arm used to be assigned from C's rows, so C's move to +$1,400 would have taken A's with it. A's
+// values are now its own literals — 25% once at +$850, arm at +$1,000 — and no other A row moves.
+SYSTEM_PARTIAL_PROFIT.ANEW = { threshold: 850, fraction: 0.25 };
+AUTO_ARM_PL_BY_SYSTEM.ANEW = 1000;
 // DART A (2026-11-25): A keeps its 101/101 $250 row as its own object, never C's, so C's new
 // $400 giveback cannot reach A either. A's values are unchanged.
 PROTECTIVE_BY_SYSTEM.ANEW = STOP_250_RULE_SET;
