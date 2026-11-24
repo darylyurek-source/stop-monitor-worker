@@ -13,7 +13,7 @@
 //
 //     presses        +$200, then +$400, then +$1,100, $40,000 each, in order
 //     Profit Prot.   25% of the shares held, once, at +$850
-//     Automatic stop arms at +$1,000, gives back $250
+//     Automatic stop REMOVED (2026-11-25): autoArmPolicy("B") is null; the $250 row stays
 //     Protective     removed (101/101), exactly as on C
 //     Trail          C's $100 P&L giveback, armed at +$500 of position P&L
 //     Vector Exit    threshold 101, blocks running exactly as C's
@@ -78,7 +78,7 @@ check("A, C and D keep -$400", [systemStop("ANEW"), systemStop("C"), systemStop(
 check("B sells 25% once at +$850, as C does",
   [partialProfitPolicy("B"), partialProfitPolicy("C")],
   [{ threshold: 850, fraction: 0.25 }, { threshold: 850, fraction: 0.25 }]);
-check("B arms by itself at +$1,000, as C does", [autoArmPolicy("B"), autoArmPolicy("C")], [1000, 1000]);
+check("B has NO automatic arm: autoArmPolicy(\"B\") is null, C keeps +$1,000", [autoArmPolicy("B"), autoArmPolicy("C")], [null, 1000]);
 check("B's protective row is its OWN 101 / 101 / $250, never C's new $400",
   [protectivePolicy("B").stockThreshold, protectivePolicy("B").marketThreshold, protectivePolicy("B").buffer, protectivePolicy("C_LEGACY").buffer],
   [101, 101, 250, 400]);

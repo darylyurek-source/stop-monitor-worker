@@ -292,7 +292,7 @@ check("live zero fallback decides instead of deferring", [t17.action, t17.event,
 // --- 18. THE +$2,000 AUTO-ARM (B and A from 2026-11-09; D carries B's whole set) --
 // decideTick never arms: engineShadow applies autoArmPolicy(system) to the verdict.
 // These pin the table so the row cannot move back silently.
-check("A, B, C and D all arm at +$1,000 (B adopted C's exit set 2026-11-24)", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, 1000, 1000, 1000]);
+check("A, C and D arm at +$1,000; B has NO automatic arm from 2026-11-25", [autoArmPolicy("ANEW"), autoArmPolicy("B"), autoArmPolicy("C"), autoArmPolicy("D")], [1000, null, 1000, 1000]);
 check("B sells 25% once at +$850", partialProfitPolicy("B"), { threshold: 850, fraction: 0.25 });
 check("A sells C's quarter at +$850 (A carries C's exit set from 2026-11-18)", partialProfitPolicy("ANEW"), { threshold: 850, fraction: 0.25 });
 check("D sells a quarter at +$850 (C's rule 7, adopted 2026-11-16)", partialProfitPolicy("D"), { threshold: 850, fraction: 0.25 });

@@ -237,9 +237,10 @@ export const SYSTEM_PARTIAL_PROFIT = {
 // below holds ($350 for A, B and C, $700 for D from 2026-11-11). Below +$2,000 the
 // Vector test is unchanged, so a position can still arm earlier on deterioration.
 export const AUTO_ARM_PL_BY_SYSTEM = {
-  // DART B (2026-11-23, the owner's confirmed rule 4): B's $350 profit giveback arms by
-  // itself at +$900 — its ONLY arming level, now that its Vector arming is removed.
-  B: 1000,
+  // DART B (2026-11-25, the owner's rule): B HAS NO AUTOMATIC ARM. Its +$1,000 / $250 stop is
+  // removed from this table, the ONE place decideTick and engineShadow's own auto-arm read, so
+  // no B position can arm the Protective Stop — and B's Vector row is 101/101, so nothing else
+  // can arm it either. B keeps its $100 P&L trail armed at +$500.
   ANEW: 2000,
   D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because

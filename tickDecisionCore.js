@@ -394,7 +394,8 @@ export function decideTick(args) {
   // every caller that reaches this function, not only in the live tick wrapper.
   // DART D arms here too from 2026-11-18 (the owner's STEP 6): D is A's rule set with the
   // press as its only difference, so its arming resolves in every caller A's does, from D's
-  // own +$1,000 row. B keeps its own +$2,000 row in engineShadow, unchanged.
+  // own +$1,000 row. B has NO automatic arm from 2026-11-25 (autoArmPolicy("B") is null), so
+  // this block arms nothing on a B position; its 101/101 $250 row stays unreachable.
   // 2026-11-24 (owner): whether the stop arms ON THIS PRINT is carried into the 25% sale,
   // so a print that both arms the stop and sells can never leave the pre-sale P&L stored as
   // the high point. When it arms here, this print's P&L IS the high the sale converts.
