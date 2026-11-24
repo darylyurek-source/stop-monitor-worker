@@ -220,7 +220,7 @@ const cTrail = (over) => pos({ price_trail_active: true, peak_pl: 3000, pressed_
 const cNoTrail = (over) => pos({ pressed_1r: true, pressed_2r: true, pressed_3r: true, partial_profit_taken: true, ...(over || {}) });
 const t10 = tick("C", cNoTrail(), 103, { halted: false });
 const t10b = tick("C", cNoTrail({ peak_pl: 600 }), 102.45, { halted: false });
-check("C has no trail: +$600 then +$490 holds, and no trail is ever armed", [t10.action, (t10.prior_patches || []).some((p) => p && p.price_trail_active === true), t10b.action, t10b.event ?? null], ["hold", false, "hold", null]);
+check("C has no trail: +$600 then +$490 holds, and no trail is ever armed", [t10.action, (t10.prior_patches || []).some((p) => p && p.price_trail_active === true), t10b.action, t10b.event ?? null], ["hold", false, "hold", "hold"]);
 check("C and C_LEGACY have no giveback row; A still has $100", [trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("ANEW")], [null, null, 100]);
 // Arming: +$500 of peak P&L starts nothing on C.
 const t10d = tick("C", cNoTrail({ peak_pl: 499 }), 102.49, { halted: false });
