@@ -1,4 +1,4 @@
-// bRestoreSelfTest.js — pins DART B's rule set in force from the 2026-11-23 session (the
+// bRestoreSelfTest.js — pins DART B's rule set in force from the 2026-11-24 session (the
 // owner's confirmed exit changes) on top of its 2026-11-19 restore.
 //
 //     node bRestoreSelfTest.js
@@ -11,7 +11,7 @@
 // A, C and D are checked here ONLY where B's rows could have reached them: each of their
 // rows is asserted unchanged beside B's.
 //
-// B FROM 2026-11-23: Press 1/2/3 at +$250/+$500/+$800, Hard Loss Stop -$1,200 on one print,
+// B FROM 2026-11-24: Press 1/2/3 at +$250/+$500/+$800, Hard Loss Stop -$1,000 on one print,
 // Profit Protection 25% once at +$1,400, the $350 giveback armed by itself at +$900, NO
 // trailing stop and NO Vector Exit (neither the 65 exit nor the +$900 grid).
 
@@ -54,8 +54,8 @@ check("A, C and D keep +$200 / +$400 / +$1,100",
    press1Threshold("C"), press2Threshold("C"), press3Threshold("C"),
    press1Threshold("D"), press2Threshold("D"), press3Threshold("D")],
   [200, 400, 1100, 200, 400, 1100, 200, 400, 1100]);
-check("B's hard loss stop is -$1,200; A -$400, C -$400, D -$400",
-  [systemStop("B"), systemStop("ANEW"), systemStop("C"), systemStop("D")], [-1200, -400, -400, -400]);
+check("B's hard loss stop is -$1,000; A -$400, C -$400, D -$400",
+  [systemStop("B"), systemStop("ANEW"), systemStop("C"), systemStop("D")], [-1000, -400, -400, -400]);
 check("B sells 25% once at +$1,400; A, C and D sell 25% at +$850",
   [partialProfitPolicy("B"), partialProfitPolicy("ANEW"), partialProfitPolicy("C"), partialProfitPolicy("D")],
   [{ threshold: 1400, fraction: 0.25 }, { threshold: 850, fraction: 0.25 },
@@ -94,12 +94,13 @@ check("Press 2 does NOT arm a trail on B", press2.patch.price_trail_active ?? nu
 const rung3 = pos({ pressed_1r: true, pressed_2r: true, shares: 992, tcb: 99992, peak_pl: 800 });
 check("B presses at +$800", tick("B", rung3, (99992 + 800.5) / 992, { vectorScore: 5 }).event, "press3");
 
-check("B's hard loss stop closes at -$1,200 on one print",
-  [tick("B", pos(), 94.0, { vectorScore: 5 }).action,
-   tick("B", pos(), 94.0, { vectorScore: 5 }).event,
-   tick("B", pos(), 94.0, { vectorScore: 5 }).gross_pl],
-  ["exit", "realtime_stop_close", -1200]);
-check("B holds just above -$1,200", tick("B", pos(), 94.01, { vectorScore: 5 }).action, "hold");
+// 200 sh at $100.00 (tcb $20,000): $95.00 is exactly -$1,000, and $95.01 is -$998.
+check("B's hard loss stop closes at -$1,000 on one print (200 sh, $20,000 basis, $95.00)",
+  [tick("B", pos(), 95.0, { vectorScore: 5 }).action,
+   tick("B", pos(), 95.0, { vectorScore: 5 }).event,
+   tick("B", pos(), 95.0, { vectorScore: 5 }).gross_pl],
+  ["exit", "realtime_stop_close", -1000]);
+check("B holds at $95.01", tick("B", pos(), 95.01, { vectorScore: 5 }).action, "hold");
 
 // 200 sh, tcb $20,000: +$1,400 sits at $107.00 — 25% of the shares held (50 of 200) are sold.
 const at1400 = tick("B", pos({ ...allPressed, peak_pl: 1400 }), 107.0, { vectorScore: 5 });
@@ -165,5 +166,5 @@ for (const c of cases) {
   }
 }
 console.log("");
-console.log("DART B rules from 2026-11-23: " + (cases.length - failed) + "/" + cases.length + " checks passed");
+console.log("DART B rules from 2026-11-24: " + (cases.length - failed) + "/" + cases.length + " checks passed");
 process.exit(failed === 0 ? 0 : 1);

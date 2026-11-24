@@ -195,7 +195,7 @@ export function ruleKeyFor(system, position) {
 // DART B's row is -$1,700 again (its 2026-11-06 configuration, restored 2026-11-19) and it
 // closes on ONE qualifying print, as it did then. A, C and D keep their own rows and the
 // two-print rule untouched.
-export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1200, C: -400, C_LEGACY: -400, D: -400 };
+export const SYSTEM_HARD_STOP = { ANEW: -1200, B: -1000, C: -400, C_LEGACY: -400, D: -400 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
