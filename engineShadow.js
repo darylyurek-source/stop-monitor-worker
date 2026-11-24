@@ -216,6 +216,10 @@ export function decide(ref, symbol, price, nowMs = Date.now()) {
     verdict.action !== "exit" &&
     !(arming && arming.action === "activate") &&
     !effective.protective_stop_active &&
+    // 2026-11-24 (owner): never add a second arming write carrying the PRE-sale P&L when the
+    // decision already armed the stop on this print — the 25% sale's adjusted high point is
+    // what the print must leave stored.
+    !(verdict.prior_patches || []).some((p) => p && p.protective_stop_active === true) &&
     Number.isFinite(Number(verdict.pl_raw)) &&
     Number(verdict.pl_raw) >= autoArmAt
   ) {

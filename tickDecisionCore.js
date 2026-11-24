@@ -117,7 +117,7 @@ export function assessPriceTrail(pos, currentPrice, pctOverride) {
 
 // --- partialProfit.ts planPartialProfit ---------------------------------------
 
-export function planPartialProfit({ pos, system, side, price, shares, tcb, pl, policy, nowIso }) {
+export function planPartialProfit({ pos, system, side, price, shares, tcb, pl, policy, nowIso, stopArmedOnThisPrint }) {
   if (!policy) return null;
   if (partialAlreadyTaken(pos)) return null;
   if (!(Number(pl) >= policy.threshold)) return null;
@@ -168,7 +168,14 @@ export function planPartialProfit({ pos, system, side, price, shares, tcb, pl, p
     peak_pl: r2(Math.max(Number(pos?.peak_pl) || 0, totalPl)),
   };
 
-  if (pos?.protective_stop_active) {
+  // THE HIGH POINT IS ADJUSTED ON EVERY SALE THE STOP COVERS (owner, 2026-11-24): the stop
+  // protects the position, so the moment 25% is sold its high point must be re-expressed in
+  // the remaining shares' terms — including when the stop and the sale land on the SAME
+  // print. Gating on pos.protective_stop_active alone skipped exactly that case and left the
+  // pre-sale P&L stored, so the next print was more than $250 below an unadjusted high and
+  // closed the trade at a price that had not moved. When it arms on this print, this print's
+  // P&L is the high the sale converts (oldHigh is absent, so high = pl).
+  if (pos?.protective_stop_active || stopArmedOnThisPrint === true) {
     const oldHigh = Number(pos?.protective_high_water_pl);
     const high = Number.isFinite(oldHigh) ? oldHigh : Number(pl);
     patch.protective_high_water_pl = r2(remainingPl + retention * Math.max(0, high - Number(pl)));
@@ -388,9 +395,14 @@ export function decideTick(args) {
   // DART D arms here too from 2026-11-18 (the owner's STEP 6): D is A's rule set with the
   // press as its only difference, so its arming resolves in every caller A's does, from D's
   // own +$1,000 row. B keeps its own +$2,000 row in engineShadow, unchanged.
+  // 2026-11-24 (owner): whether the stop arms ON THIS PRINT is carried into the 25% sale,
+  // so a print that both arms the stop and sells can never leave the pre-sale P&L stored as
+  // the high point. When it arms here, this print's P&L IS the high the sale converts.
+  let armsProtectiveNow = false;
   if ((ruleKey === "C_LEGACY" || ruleKey === "ANEW" || ruleKey === "D" || ruleKey === "B") && !protectiveActive) {
     const cArm = autoArmPolicy(sys);
     if (Number.isFinite(cArm) && pl >= cArm) {
+      armsProtectiveNow = true;
       priorPatches.push({
         protective_stop_active: true,
         protective_high_water_pl: r2(pl),
@@ -473,6 +485,7 @@ export function decideTick(args) {
   const partial = planPartialProfit({
     pos, system: sys, side, price, shares, tcb, pl,
     policy: partialProfitPolicy(sys), nowIso,
+    stopArmedOnThisPrint: armsProtectiveNow,
   });
   if (partial) {
     return {
