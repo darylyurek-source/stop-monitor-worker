@@ -11,7 +11,7 @@
 // No network, no database, no clock, no trading record. Pure arithmetic.
 
 import { decideTick } from "./tickDecisionCore.js";
-import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor, systemCloseMinute, closeReasonFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, trailGivebackFor } from "./tickRules.js";
+import { press1Threshold, systemStop, protectivePolicy, partialProfitPolicy, autoArmPolicy, pressPlan, vectorExitThreshold, ruleKeyFor, systemCloseMinute, closeReasonFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, trailGivebackFor, trailArmPlFor } from "./tickRules.js";
 import { computeVector } from "./vectorCore.js";
 
 const NOW = "2026-10-09T15:00:00.000Z";
@@ -241,6 +241,15 @@ check("A's trail exits on C's $100 giveback from its peak", [aTrail.action, aTra
 const aArmLow = tick("ANEW", pos({ peak_pl: 499 }), 102.49, { halted: false });
 const aArmAt = tick("ANEW", pos({ peak_pl: 500 }), 102.5, { halted: false });
 check("A's trail arms exactly at +$500 and writes no price extreme", [(aArmLow.prior_patches || []).length, (aArmAt.prior_patches || []).filter((p) => p && p.price_trail_active === true), (aArmAt.prior_patches || []).some((p) => p && p.price_trail_extreme != null)], [0, [{ price_trail_active: true, price_trail_activated_time: NOW }], false]);
+// DART B'S OWN SWITCH-ON LEVEL (2026-11-24, the owner's rule): B's $100 trail switches on at
+// +$400 of position P&L, not +$500, and not one dollar early — +$390 starts nothing. A and D
+// keep the shared +$500. Only the switch-on level moves: every giveback is still $100.
+const bArmLow = tick("B", pos({ peak_pl: 390 }), 101.5, { halted: false });
+const bArmAt = tick("B", pos({ peak_pl: 400 }), 101.5, { halted: false });
+check("B's trail switches on at exactly +$400 and not at +$390", [trailArmPlFor("B"), (bArmLow.prior_patches || []).some((p) => p && p.price_trail_active === true), (bArmAt.prior_patches || []).filter((p) => p && p.price_trail_active === true)], [400, false, [{ price_trail_active: true, price_trail_activated_time: NOW }]]);
+const aArm400 = tick("ANEW", pos({ peak_pl: 400 }), 101.5, { halted: false });
+const dArm400 = tick("D", pos({ peak_pl: 400 }), 101.5, { halted: false });
+check("A and D still switch their trail on at +$500, not +$400", [trailArmPlFor("ANEW"), trailArmPlFor("D"), (aArm400.prior_patches || []).some((p) => p && p.price_trail_active === true), (dArm400.prior_patches || []).some((p) => p && p.price_trail_active === true)], [500, 500, false, false]);
 check("the giveback rows from 2026-11-24: A, B and D have $100; C and C_LEGACY have none", [trailGivebackFor("ANEW"), trailGivebackFor("B"), trailGivebackFor("C"), trailGivebackFor("C_LEGACY"), trailGivebackFor("D")], [100, 100, null, null, 100]);
 
 // --- 11. PRESS 3 PRECEDENCE --------------------------------------------------

@@ -39,7 +39,7 @@
 //
 // Paper only. USD. No trading state is held between calls.
 
-import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, bProfitTrailPct, press1Threshold, press2Threshold, press3Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, systemCloseMinute, closeReasonFor, trailGivebackFor, priceTrailDisabledFor, vectorExitFullyDisabled } from "./tickRules.js";
+import { r2, orderCost, slippageCost, unrealized, PRESS_SIZE_USD, PRESS2, PRESS3, TARGET, GRID_STEP, LOSS_LEVELS, PRICE_TRAIL_PCT, cProfitTrailPct, bProfitTrailPct, press1Threshold, press2Threshold, press3Threshold, systemStop, pressPlan, protectivePolicy, autoArmPolicy, partialProfitPolicy, isSystemHalted, D_MIN_FREE_USD, vectorExitThreshold, ruleKeyFor, C_TRAIL_ARM_PL, C_TRAIL_GIVEBACK_USD, trailArmPlFor, systemCloseMinute, closeReasonFor, trailGivebackFor, priceTrailDisabledFor, vectorExitFullyDisabled } from "./tickRules.js";
 import { computeStockVector } from "./vectorCore.js";
 
 // --- the 16:00 ET session end ------------------------------------------------
@@ -363,14 +363,15 @@ export function decideTick(args) {
 
   const priorPatches = [];
 
-  // Press 2 activates the trail for B. DART C's trail ARMS AT +$500 of peak P&L instead,
-  // with or without a press (2026-11-15, the owner's rule 7), and DART A's is the same
-  // from 2026-11-18 (STEP 1 part 2: A trades C's exit set). The write happens on this
-  // tick, before any stop is evaluated, and can never itself breach.
+  // The $100 trail arms at the account's OWN switch-on level: DART B at +$400 (2026-11-24,
+  // the owner's rule), DART A and DART D at the shared +$500, with or without a press. The
+  // level is a row (tickRules.TRAIL_ARM_BY_SYSTEM, read through trailArmPlFor), so no account
+  // can take another's. The write happens on this tick, before any stop is evaluated, and can
+  // never itself breach.
   const trailArmsNow = trailOff
     ? false
     : isC
-      ? (!pt.active && peakTotalForTrail >= C_TRAIL_ARM_PL)
+      ? (!pt.active && peakTotalForTrail >= trailArmPlFor(ruleKey))
       : (!pt.active && pos.pressed_2r);
   if (trailArmsNow) {
     priorPatches.push(isC

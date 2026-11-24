@@ -415,6 +415,19 @@ export function trailGivebackFor(system) {
   return Number.isFinite(Number(v)) ? Number(v) : null;
 }
 
+// DART B'S OWN SWITCH-ON LEVEL (owner, 2026-11-24): B's $100 trail switches on at +$400 of
+// position P&L instead of the shared +$500. It is B's own row, the same way its giveback is
+// its own row — A and D still switch on at +$500 (C_TRAIL_ARM_PL), and C has no $100 stop at
+// all. Nothing else about B changes. Mirrors Base44's shared/priceTrailingStop.ts.
+export const TRAIL_ARM_BY_SYSTEM = { B: 400 };
+
+// The P&L level at which a system's $100 trail switches on: its own row, otherwise the
+// shared +$500.
+export function trailArmPlFor(system) {
+  const v = TRAIL_ARM_BY_SYSTEM[String(system ?? "").trim().toUpperCase()];
+  return Number.isFinite(Number(v)) ? Number(v) : C_TRAIL_ARM_PL;
+}
+
 // ---------------------------------------------------------------------------
 // The session end, per account. FROM THE 2026-11-25 SESSION EVERY ACCOUNT CLOSES AT
 // 15:30 ET (the owner's direction, 2026-11-24): A, B, C and D each hold a row here, so
