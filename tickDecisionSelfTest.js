@@ -48,7 +48,7 @@ function check(name, actual, expected) {
 }
 
 // --- RULE TABLE MIRROR ---------------------------------------------------------
-check("Press 1 per system: A, B, C and D all press at +$200 from 2026-11-18", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("D")], [200, 200, 200, 200]);
+check("Press 1 per system: A, B, D and C_LEGACY at +$200, C at +$225, an unlisted key at +$200", [press1Threshold("ANEW"), press1Threshold("B"), press1Threshold("C"), press1Threshold("C_LEGACY"), press1Threshold("D"), press1Threshold("A")], [200, 200, 225, 200, 200, 200]);
 check("hard stop per system: A, B and D -$400, C -$1,150 (C's own move 2026-11-24; A kept -$400)", [systemStop("ANEW"), systemStop("B"), systemStop("C"), systemStop("D")], [-400, -400, -1150, -400]);
 // C's cutover was CANCELLED, so EVERY C position — whatever its entry time, and a row
 // with none — resolves to C_LEGACY, whose hard stop is -$1,150 from 2026-11-24 (the owner's

@@ -70,17 +70,24 @@ export function unrealized(side, currentPrice, shares, totalCostBasis) {
 // DART B's row is +$250 again: its 2026-11-06 configuration, restored 2026-11-19.
 export const CLONE_PRESS1 = {
   B: 200,
-  C: 200,
+  // DART C (2026-11-24, the owner's press-level change): C's Press 1 is +$225. A, B, D and
+  // C_LEGACY keep +$200.
+  C: 225,
+  // C_LEGACY IS RESTORED TO ITS ORIGINAL PRESS SETTINGS (owner, 2026-11-24): +$200 / +$400 /
+  // +$1,100, carried as an EXPLICIT row so it can never inherit C's +$225 / +$350.
+  C_LEGACY: 200,
   D: 200,
   E: 250,
   ANEW: 200,
 };
 
+// A key with no row of its own (A's old "A" alias, a retired account) reads the SHARED +$200.
+// It never falls back to C's row: from 2026-11-24 C carries +$225, and C's level is C's alone.
+// DART A is on its own +$200 row either way — this removes the dependency rather than relying
+// on it. Mirrors Base44's shared/cloneSystems.ts.
 export function press1Threshold(system) {
   const v = CLONE_PRESS1[String(system ?? "").trim().toUpperCase()];
-  if (Number.isFinite(Number(v))) return Number(v);
-  const c = CLONE_PRESS1.C;
-  return Number.isFinite(Number(c)) ? Number(c) : 200;
+  return Number.isFinite(Number(v)) ? Number(v) : 200;
 }
 
 // DART B was RESTORED to its 2026-11-06 end-of-day configuration at 12:10 PM ET on
@@ -94,11 +101,23 @@ function ruleIsB(system) {
   return String(system ?? "").trim().toUpperCase() === "B";
 }
 
+// DART C'S OWN PRESS 2 (2026-11-24, the owner's press-level change): +$350 on its own row,
+// because PRESS2 (the shared +$400) is what A, B, D and C_LEGACY read and it does not move.
+// C's Press 3 stays the shared +$1,100 and every press stays the fixed $40,000.
+export const C_PRESS2 = 350;
+
+// C AND ONLY C: C_LEGACY keeps its original +$400 / +$1,100 and must never inherit C's row.
+function ruleIsC(system) {
+  return String(system ?? "").trim().toUpperCase() === "C";
+}
+
 export function press2Threshold(system) {
+  if (ruleIsC(system)) return C_PRESS2;
   return ruleIsB(system) ? B_PRESS2 : PRESS2;
 }
 
 export function press3Threshold(system) {
+  if (ruleIsC(system)) return PRESS3;
   return ruleIsB(system) ? B_PRESS3 : PRESS3;
 }
 
