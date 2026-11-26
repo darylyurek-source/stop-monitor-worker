@@ -76,7 +76,8 @@ export const CLONE_PRESS1 = {
   // C_LEGACY IS RESTORED TO ITS ORIGINAL PRESS SETTINGS (owner, 2026-11-24): +$200 / +$400 /
   // +$1,100, carried as an EXPLICIT row so it can never inherit C's +$225 / +$350.
   C_LEGACY: 200,
-  D: 200,
+  // DART D (2026-11-26, the C replica): D's Press 1 is C's +$225, on D's own row.
+  D: 225,
   E: 250,
   ANEW: 200,
 };
@@ -106,18 +107,31 @@ function ruleIsB(system) {
 // C's Press 3 stays the shared +$1,100 and every press stays the fixed $40,000.
 export const C_PRESS2 = 350;
 
+// DART D (2026-11-26, the C replica): D's Press 2 and Press 3 are C's +$350 and +$1,100,
+// carried as D's OWN constants so a later change to C's ladder (or to the shared PRESS3) cannot
+// move D, and a variation tested on D can never reach C.
+export const D_PRESS2 = 350;
+export const D_PRESS3 = 1100;
+
 // C AND ONLY C: C_LEGACY keeps its original +$400 / +$1,100 and must never inherit C's row.
 function ruleIsC(system) {
   return String(system ?? "").trim().toUpperCase() === "C";
 }
 
+// DART D (2026-11-26, the C replica): D resolves its own press ladder.
+function ruleIsD(system) {
+  return String(system ?? "").trim().toUpperCase() === "D";
+}
+
 export function press2Threshold(system) {
   if (ruleIsC(system)) return C_PRESS2;
+  if (ruleIsD(system)) return D_PRESS2;
   return ruleIsB(system) ? B_PRESS2 : PRESS2;
 }
 
 export function press3Threshold(system) {
   if (ruleIsC(system)) return PRESS3;
+  if (ruleIsD(system)) return D_PRESS3;
   return ruleIsB(system) ? B_PRESS3 : PRESS3;
 }
 
@@ -131,8 +145,10 @@ export function press3Threshold(system) {
 // buying power ($120,000 or the free balance, skipped below $20,000 free). Its trail is the
 // +$500 / $100 P&L giveback, never a press trail.
 // ---------------------------------------------------------------------------
+// DART D (2026-11-26, the C replica): D's single buying-power-sized press is REMOVED. D now
+// presses C's ladder of three (D_PRESS2 / D_PRESS3 above) at the fixed PRESS_SIZE_USD, so it
+// has no row here.
 export const PRESS_PLAN = {
-  D: { single: true, dynamicSize: true, trailAtFirstPress: false },
 };
 
 export function pressPlan(system) {
@@ -215,7 +231,9 @@ export function ruleKeyFor(system, position) {
 // DART B's row is -$1,700 again (its 2026-11-06 configuration, restored 2026-11-19) and it
 // closes on ONE qualifying print, as it did then. A, C and D keep their own rows and the
 // two-print rule untouched.
-export const SYSTEM_HARD_STOP = { ANEW: -400, B: -400, C: -1150, C_LEGACY: -1150, D: -400 };
+// DART D (2026-11-26, the C replica): D's Hard Loss Stop is C's -$1,150, two-print rule, on
+// D's own row.
+export const SYSTEM_HARD_STOP = { ANEW: -400, B: -400, C: -1150, C_LEGACY: -1150, D: -1150 };
 
 export function systemStop(system) {
   const v = SYSTEM_HARD_STOP[String(system ?? "").trim().toUpperCase()];
@@ -238,7 +256,7 @@ export const SYSTEM_PARTIAL_PROFIT = {
   // held, once, the first time total unrealized P&L reaches +$1,400, whole shares.
   B: { threshold: 850, fraction: 0.25 },
   ANEW: { threshold: 1850, fraction: 0.25 }, // DART A — B plus the 5-minute delay
-  D: { threshold: 850, fraction: 0.25 }, // DART D (2026-11-16): C's rule set — 25% once at +$850
+  D: { threshold: 1400, fraction: 0.25 }, // DART D (2026-11-26, the C replica): C's rule — 25% once at +$1,400
   // DART C (set 2026-11-11, after that day's close): C runs B's rules EXACTLY from
   // the next session, so it carries B's Profit Protection — 25% once at +$1,850.
   // The row removed on 2026-11-06 is restored; its one remaining difference from B
@@ -266,7 +284,7 @@ export const AUTO_ARM_PL_BY_SYSTEM = {
   // no B position can arm the Protective Stop — and B's Vector row is 101/101, so nothing else
   // can arm it either. B keeps its $100 P&L trail armed at +$500.
   ANEW: 2000,
-  D: 1000, // DART D (2026-11-16): +$1,000 — C's rule set
+  D: 1400, // DART D (2026-11-26, the C replica): +$1,400 — the same print as its 25% sale, as C
   // DART C (2026-11-15, the owner's rule 8): +$1,000 — C's ONLY arming level, because
   // the Protective Stop was removed from C on the same day.
   // DART C (2026-11-25, the owner's rule): +$1,400 — the same print as C's 25% sale, so the
@@ -310,6 +328,12 @@ export const C_RULE_SET = { stockThreshold: 65, marketThreshold: 86, buffer: 350
 // arming thresholds are 101/101, which no Vector score can reach. The row's only
 // remaining job is the $250 the Automatic Hard Stop gives back once it arms at +$1,000.
 const D_RULE_SET = { stockThreshold: 101, marketThreshold: 101, buffer: 250 };
+
+// DART D (2026-11-26, the C replica): D's OWN copy of C's live protective row — 101/101, which
+// no Vector score can reach, and the $350 the Automatic Hard Stop gives back once it arms at
+// +$1,400. A separate constant, so a later change to C's row cannot move D. D_RULE_SET above is
+// no longer read by any key.
+const D_C_REPLICA_RULE_SET = { stockThreshold: 101, marketThreshold: 101, buffer: 350 };
 
 // DART C's Vector test (2026-11-11, after that day's close — and now PERMANENT,
 // because the cutover that would have moved C to A's 55/65 was cancelled on
@@ -358,7 +382,7 @@ export const PROTECTIVE_BY_SYSTEM = {
   C_LEGACY: C_LIVE_RULE_SET,
   // DART D arms at B's 55/65 and gives back $700 from 2026-11-11 (its stops were
   // doubled on D's own account; B, C and A keep $350).
-  D: D_RULE_SET,
+  D: D_C_REPLICA_RULE_SET,
   // Legacy A alias, no longer routed. Kept so a historical 'A' record still
   // resolves to the same 55/65 rule set it always had — never to the fallback.
   A: B_RULE_SET,
@@ -426,7 +450,8 @@ export const C_TRAIL_GIVEBACK_USD = 100;
 // a C position resolves C_LEGACY, so BOTH keys are gone from this table and both are listed in
 // NO_PRICE_TRAIL_SYSTEMS below — C has no trail of any kind and does NOT fall back to the
 // share-price percentage trail. Everything else about C is unchanged. A, B and D keep theirs.
-export const TRAIL_GIVEBACK_BY_SYSTEM = { B: 100, D: 100 };
+// DART D (2026-11-26, the C replica): D's $100 giveback row is removed, exactly as C's was.
+export const TRAIL_GIVEBACK_BY_SYSTEM = { B: 100 };
 
 // The giveback (USD) a system's trail enforces, or null when it has the price trail.
 export function trailGivebackFor(system) {
@@ -544,7 +569,8 @@ export function vectorExitThreshold(system) {
 // write grid state and return before the press ladder, and a position already armed under the
 // old trail could still breach. Both checks are ROWS, so the removal holds for a position
 // opened before this change as well as after it.
-export const NO_PRICE_TRAIL_SYSTEMS = ["C", "C_LEGACY"];
+// DART D (2026-11-26, the C replica): D has no trail of any kind, exactly as C.
+export const NO_PRICE_TRAIL_SYSTEMS = ["C", "C_LEGACY", "D"];
 export function priceTrailDisabledFor(system) {
   return NO_PRICE_TRAIL_SYSTEMS.includes(String(system ?? "").trim().toUpperCase());
 }

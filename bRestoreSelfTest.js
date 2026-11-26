@@ -77,14 +77,14 @@ check("C presses +$225 / +$350 / +$1,100 from 2026-11-24",
 check("C_LEGACY keeps +$200 / +$400 / +$1,100 and never inherits C's ladder",
   [press1Threshold("C_LEGACY"), press2Threshold("C_LEGACY"), press3Threshold("C_LEGACY")],
   [200, 400, 1100]);
-check("A and D keep +$200 / +$400 / +$1,100",
+check("A keeps +$200 / +$400 / +$1,100; D carries C's +$225 / +$350 / +$1,100 (C replica, 2026-11-26)",
   [press1Threshold("ANEW"), press2Threshold("ANEW"), press3Threshold("ANEW"),
    press1Threshold("D"), press2Threshold("D"), press3Threshold("D")],
-  [200, 400, 1100, 200, 400, 1100]);
+  [200, 400, 1100, 225, 350, 1100]);
 // The dependency A used to carry: a key with no row of its own reads the shared +$200.
 check("an unlisted key falls back to the shared +$200, never C's +$225", press1Threshold("A"), 200);
 check("B's hard loss stop is its own -$400; C carries -$1,150", [systemStop("B"), systemStop("C")], [-400, -1150]);
-check("A and D keep -$400, C carries -$1,150", [systemStop("ANEW"), systemStop("C"), systemStop("D")], [-400, -1150, -400]);
+check("A keeps -$400, C carries -$1,150, D carries C's -$1,150 (C replica, 2026-11-26)", [systemStop("ANEW"), systemStop("C"), systemStop("D")], [-400, -1150, -1150]);
 check("B sells 25% once at +$850; C's own sale waits for +$1,400 from 2026-11-25",
   [partialProfitPolicy("B"), partialProfitPolicy("C")],
   [{ threshold: 850, fraction: 0.25 }, { threshold: 1400, fraction: 0.25 }]);

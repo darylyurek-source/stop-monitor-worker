@@ -53,10 +53,10 @@ check("C keeps its hard stop and its 15:00 close", [systemStop("C"), systemClose
 check("A keeps its own +$850 sale, +$1,000 arm and $250 giveback", [
   partialProfitPolicy("ANEW"), autoArmPolicy("ANEW"), protectivePolicy("ANEW").buffer,
 ], [{ threshold: 850, fraction: 0.25 }, 1000, 250]);
-check("B and D are untouched", [
+check("B is untouched; D carries C's +$1,400 sale, +$1,400 arm and $350 giveback (C replica, 2026-11-26)", [
   partialProfitPolicy("B"), autoArmPolicy("B"), protectivePolicy("B").buffer,
   partialProfitPolicy("D"), autoArmPolicy("D"), protectivePolicy("D").buffer,
-], [{ threshold: 850, fraction: 0.25 }, null, 250, { threshold: 850, fraction: 0.25 }, 1000, 250]);
+], [{ threshold: 850, fraction: 0.25 }, null, 250, { threshold: 1400, fraction: 0.25 }, 1400, 350]);
 
 // --- PRINT 1: $107.00, +$1,400 — THE SALE AND THE ARM ON ONE PRINT -----------
 const gridBefore = { profit_grid_active: true, last_profit_level: 900, next_up_profit_level: 1000, next_down_profit_level: 800 };
