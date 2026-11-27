@@ -473,22 +473,28 @@ export function trailArmPlFor(system) {
 }
 
 // ---------------------------------------------------------------------------
-// The session end, per account. FROM THE 2026-11-25 SESSION EVERY ACCOUNT CLOSES AT
-// 15:30 ET (the owner's direction, 2026-11-24): A, B, C and D each hold a row here, so
-// nothing new is opened at or after 15:30 and everything still open is closed then,
-// recorded as close_1530. From 2026-11-19 to 2026-11-24 the four closed at 15:00
+// The session end, per account. A, B AND C CLOSE AT 15:30 ET (the owner's direction,
+// 2026-11-24): their three rows are unchanged, so nothing new is opened at or after 15:30
+// and everything still open is closed then, recorded as close_1530.
+//
+// DART D CLOSES AT THE OFFICIAL CLOSE, 16:00 ET, FROM THE 2026-11-27 SESSION (the owner's
+// direction, 2026-11-27): D trades the whole regular session — entries from 9:30, no 10:30
+// restriction — so its book must run to the exchange's close instead of stopping at 15:30.
+// D's row is the only one that moved; A, B and C keep 15:30 exactly as they were.
+//
+// The minute is a table entry, so the change lives here and nowhere else. decideTick and the
+// close sweep both read this one table, so a tick and the clock can never part company on it.
+// An official early close (13:00) still wins for every account, because systemCloseMinute()
+// takes the smaller of this row and the early close — so today's D book closes at 13:00 and
+// records close_1300. From 2026-11-19 to 2026-11-24 every account closed at 15:00
 // (close_1500), and before that at the shared 16:00, except C and D which closed at 13:30.
-// The minute is a table entry, so the change lives here and nowhere else. decideTick and
-// the close sweep both read this one table, so a tick and the clock can never part
-// company on it. An official early close (13:00) still wins, because systemCloseMinute()
-// takes the smaller of this row and the early close.
 // ---------------------------------------------------------------------------
 export const SYSTEM_CLOSE_MINUTE = {
   ANEW: 15 * 60 + 30,
   B: 15 * 60 + 30, // DART B (2026-11-25): 3:30 PM ET close, C's row, recorded as close_1530
   C: 15 * 60 + 30,
   C_LEGACY: 15 * 60 + 30,
-  D: 15 * 60 + 30,
+  D: 16 * 60 + 0, // DART D (2026-11-27): the official close — 16:00, or 13:00 on an early close
 };
 
 // TODAY ONLY — 2026-11-16 (owner authorized for this session alone). DART C and DART D

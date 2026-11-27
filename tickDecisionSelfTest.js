@@ -338,11 +338,16 @@ check("giveback after the automatic arm: A and B $250, C, C_LEGACY and D (C repl
 // Every row D resolves must equal C's EFFECTIVE row: C's own name for the presses, Profit
 // Protection and the automatic arm, and C_LEGACY (where every C position resolves through
 // ruleKeyFor) for the hard stop, the Protective Stop, the trail and the session close.
-check("D's every row equals C's effective row, field for field",
+check("D's every exit row equals C's effective row, field for field — the session close is D's own from 2026-11-27",
   [press1Threshold("D"), press2Threshold("D"), press3Threshold("D"), pressPlan("D"), partialProfitPolicy("D"), autoArmPolicy("D"),
-   systemStop("D"), protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("D").buffer, trailGivebackFor("D"), vectorExitThreshold("D"), systemCloseMinute("D"), closeReasonFor("D")],
+   systemStop("D"), protectivePolicy("D").stockThreshold, protectivePolicy("D").marketThreshold, protectivePolicy("D").buffer, trailGivebackFor("D"), vectorExitThreshold("D")],
   [press1Threshold("C"), press2Threshold("C"), press3Threshold("C"), pressPlan("C"), partialProfitPolicy("C"), autoArmPolicy("C"),
-   systemStop("C_LEGACY"), protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("C_LEGACY").buffer, trailGivebackFor("C_LEGACY"), vectorExitThreshold("C_LEGACY"), systemCloseMinute("C_LEGACY"), closeReasonFor("C_LEGACY")]);
+   systemStop("C_LEGACY"), protectivePolicy("C_LEGACY").stockThreshold, protectivePolicy("C_LEGACY").marketThreshold, protectivePolicy("C_LEGACY").buffer, trailGivebackFor("C_LEGACY"), vectorExitThreshold("C_LEGACY")]);
+// THE SESSION CLOSE IS D'S OWN (2026-11-27, the owner's direction): D trades the whole regular
+// session, so it closes at the official 16:00 and records close_1600 while C stays at 15:30.
+check("D closes at the official 16:00 with close_1600; C stays at 15:30 with close_1530",
+  [systemCloseMinute("D"), closeReasonFor("D"), systemCloseMinute("C"), closeReasonFor("C")],
+  [960, "close_1600", 930, "close_1530"]);
 // The automatic arm resolves inside decideTick for both accounts, with the same patch.
 const armC = tick("C", pos({ partial_profit_taken: true }), 107, { halted: false });
 const armD = tick("D", pos({ partial_profit_taken: true }), 107, { halted: false });
@@ -355,15 +360,17 @@ check("A still presses at +$200, $40,000 (unchanged)", [pA.event, pA.pl_raw, pA.
 check("Vector Exit: A, B, C and D can never fire (101)", [vectorExitThreshold("C"), vectorExitThreshold("C_LEGACY"), vectorExitThreshold("D"), vectorExitThreshold("ANEW"), vectorExitThreshold("B")], [101, 101, 101, 101, 101]);
 
 // --- 19. THE SESSION CLOSE, PER ACCOUNT ---------------------------------------
-// Every account closes its book at 15:30 ET from the 2026-11-25 session and records
-// close_1530 (the owner's direction, 2026-11-24): A, B, C and D, the same minute and the
-// same reason. 2026-11-16 remains the one full-session exception A, C and D carry, where
-// they run to the shared 16:00 and record close_1600.
+// A, B and C close their books at 15:30 ET from the 2026-11-25 session and record
+// close_1530 (the owner's direction, 2026-11-24). DART D closes at the OFFICIAL close,
+// 16:00 ET, from the 2026-11-27 session (the owner's direction, 2026-11-27): D trades the
+// whole regular session, so its book runs to the exchange's close. 2026-11-16 remains the
+// one full-session exception A, C and D carry, where they run to the shared 16:00 and
+// record close_1600.
 const quiet = { partial_profit_taken: true, pressed_1r: true, pressed_2r: true, pressed_3r: true };
 const at = (iso, system) => decideTick({ system, position: pos(quiet), price: 100.5, nowIso: iso });
-check("session close per account: A, B, C and D all at 15:30 with close_1530",
+check("session close per account: A, B and C at 15:30 with close_1530, D at the official 16:00 with close_1600",
   [systemCloseMinute("C"), systemCloseMinute("C_LEGACY"), systemCloseMinute("B"), systemCloseMinute("D"), systemCloseMinute("ANEW"), closeReasonFor("C"), closeReasonFor("B"), closeReasonFor("ANEW"), closeReasonFor("D")],
-  [930, 930, 930, 930, 930, "close_1530", "close_1530", "close_1530", "close_1530"]);
+  [930, 930, 930, 960, 930, "close_1530", "close_1530", "close_1530", "close_1600"]);
 // 20:29Z = 15:29 ET, 20:31Z = 15:31 ET on 2026-11-17 (EST).
 check("B is still open at 15:29 and closed at 15:31 with close_1530",
   [at("2026-11-17T20:29:00.000Z", "B").action, at("2026-11-17T20:31:00.000Z", "B").action, at("2026-11-17T20:31:00.000Z", "B").exit_reason],
@@ -371,9 +378,14 @@ check("B is still open at 15:29 and closed at 15:31 with close_1530",
 check("A is still open at 15:29 and closed at 15:31 with close_1530",
   [at("2026-11-17T20:29:00.000Z", "ANEW").action, at("2026-11-17T20:31:00.000Z", "ANEW").action, at("2026-11-17T20:31:00.000Z", "ANEW").exit_reason],
   ["hold", "exit", "close_1530"]);
-check("C and D are still open at 15:29 and closed at 15:31 with close_1530, exactly as A and B",
-  [at("2026-11-17T20:29:00.000Z", "C").action, at("2026-11-17T20:31:00.000Z", "C").exit_reason, at("2026-11-17T20:29:00.000Z", "D").action, at("2026-11-17T20:31:00.000Z", "D").exit_reason],
-  ["hold", "close_1530", "hold", "close_1530"]);
+check("C is still open at 15:29 and closed at 15:31 with close_1530, exactly as A and B",
+  [at("2026-11-17T20:29:00.000Z", "C").action, at("2026-11-17T20:31:00.000Z", "C").exit_reason],
+  ["hold", "close_1530"]);
+// 21:01Z = 16:01 ET on 2026-11-17 (EST). D trades the whole session from 2026-11-27, so its
+// book is still open at 15:31 and closes at the official 16:00, recorded as close_1600.
+check("D is still open at 15:31 and closed at 16:01 with close_1600",
+  [at("2026-11-17T20:29:00.000Z", "D").action, at("2026-11-17T20:31:00.000Z", "D").action, at("2026-11-17T21:01:00.000Z", "D").exit_reason],
+  ["hold", "hold", "close_1600"]);
 // The 13:30 close is gone: at 13:31 ET on 2026-11-17 every account still holds.
 check("nobody closes at 13:31 any more — the book runs to 15:30",
   [at("2026-11-17T18:31:00.000Z", "C").action, at("2026-11-17T18:31:00.000Z", "D").action, at("2026-11-17T18:31:00.000Z", "ANEW").action, at("2026-11-17T18:31:00.000Z", "B").action],

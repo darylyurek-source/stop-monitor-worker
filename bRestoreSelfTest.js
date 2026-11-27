@@ -18,7 +18,8 @@
 //     Trail          C's $100 P&L giveback, armed at +$500 of position P&L
 //     Vector Exit    threshold 101, blocks running exactly as C's
 //     Hard Loss      -$400 on its own row (C moved to -$1,150 on 2026-11-24)
-//     Session        15:30 ET, recorded as close_1530
+//     Session        15:30 ET, recorded as close_1530 (D closes at the official 16:00
+//                    from 2026-11-27, recorded as close_1600)
 //
 // No network, no database, no clock, no trading record. Exit code 0 = every case passes.
 
@@ -108,7 +109,9 @@ check("B's Vector Exit values are 101 and not disabled",
 check("B closes at 15:30 ET as close_1530, exactly as C does",
   [systemCloseMinute("B"), closeReasonFor("B"), systemCloseMinute("C"), closeReasonFor("C")],
   [930, "close_1530", 930, "close_1530"]);
-check("A and D close at 15:30 too", [systemCloseMinute("ANEW"), systemCloseMinute("D")], [930, 930]);
+check("A closes at 15:30; D closes at the official 16:00 from 2026-11-27",
+  [systemCloseMinute("ANEW"), closeReasonFor("ANEW"), systemCloseMinute("D"), closeReasonFor("D")],
+  [930, "close_1530", 960, "close_1600"]);
 check("B is not halted", HALTED_SYSTEMS.includes("B"), false);
 
 // --- B'S DECISIONS ------------------------------------------------------------
